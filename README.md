@@ -25,7 +25,6 @@ python3 chord_network.py --gui
 - **Depart Node**: Remove by Short ID (last 4 digits of Node ID).
 - **Exit**: Clean shutdown, ensuring all nodes have departed.
 - **Live Visualization**: Network graph automatically updates itself every time a node joins or departs.
- - **Node Labels**: `short_id | last2_port_digits`  
-    _(e.g., Node ID: `135117988181535955003563159026686220824819050071` & Port: `5001` → Label: `7821|01`)_  
-    We follow this format to keep visualization simple, yet informative.
-
+  - **Node Labels**: `short_id | last2_port_digits`  
+     _(e.g., Node ID: `135117988181535955003563159026686220824819050071` & Port: `5001` → Label: `7821|01`)_  
+     We follow this format to keep visualization simple, yet informative.
