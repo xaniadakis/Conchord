@@ -37,7 +37,7 @@ class ChordGUI:
 
     def create_visualization(self):
         """ Create a Matplotlib canvas inside Tkinter to display the network overlay """
-        self.fig, self.ax = plt.subplots(figsize=(7, 5))
+        self.fig, self.ax = plt.subplots(figsize=(6, 4))
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.root)
         self.canvas.get_tk_widget().pack()
 
@@ -146,8 +146,21 @@ class ChordNetwork:
             G.add_edge(node_id, successor)
             labels[node_id] = f"{str(node_id)[-4:]}|{str(node.port)[-2:]}"
 
-        nx.draw_circular(G, with_labels=True, labels=labels, node_size=700, node_color="lightblue",
-                edge_color="gray", font_size=5, arrowsize=8, ax=ax)
+        # Increase figure size and margins to avoid cropping
+        ax.set_xlim(-1.2, 1.2)  # Increase limits for more space
+        ax.set_ylim(-1.2, 1.2)
+
+        # Add extra padding to avoid clipping
+        ax.margins(0.2)
+
+        # Draw network with better spacing
+        pos = nx.circular_layout(G)  # Use circular layout
+        nx.draw(G, pos, with_labels=True, labels=labels, node_size=800, node_color="lightblue",
+                edge_color="gray", font_size=6, arrowsize=10, ax=ax)
+
+        # Ensure all labels are fully visible
+        for node, (x, y) in pos.items():
+            ax.text(x, y, labels[node], fontsize=6, ha='center', va='center')
 
     def depart_all_nodes(self):
         """ Departs all nodes from the network """
@@ -211,15 +224,15 @@ class ChordNetwork:
 import sys
 
 if __name__ == "__main__":
-    mode = "--gui"  # Default mode is GUI
+    mode = "--gui"
 
     if len(sys.argv) > 1:
         mode = sys.argv[1].lower()
 
     if mode == "--cli":
         log(PREFIX, "Starting Chord Network in CLI mode...")
-        network = ChordNetwork(BOOTSTRAP_IP, BOOTSTRAP_PORT, gui=None)  # No GUI in CLI mode
-        network.cli()  # Run the CLI mode
+        network = ChordNetwork(BOOTSTRAP_IP, BOOTSTRAP_PORT, gui=None)
+        network.cli()
     elif mode == "--gui":
         log(PREFIX, "Starting Chord Network in GUI mode...")
         root = tk.Tk()

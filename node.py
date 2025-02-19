@@ -90,7 +90,7 @@ class Node:
             response = f"Inserted key {key} with value {value}"
         elif command == "query" and len(parts) == 2:
             key = parts[1]
-            response = f"Query result: {self.query(key)}"
+            response = f"{self.query(key)}"
         elif command == "delete" and len(parts) == 2:
             key = parts[1]
             response = f"Deleted key {key}" if self.delete(key) else "Key not found"
@@ -108,7 +108,11 @@ class Node:
         hashed_key = hash_key(key)
         if self.responsible_for(hashed_key):
             if key in self.data:
-                self.data[key] += f", {value}"  # Concatenate for update
+                # no duplicates
+                existing_values = self.data[key].split(", ")
+                # concatenate for update
+                if value not in existing_values:
+                    self.data[key] += f", {value}"
             else:
                 self.data[key] = value
         else:
