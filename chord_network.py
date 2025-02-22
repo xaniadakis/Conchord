@@ -1,6 +1,5 @@
 import readline
 import tkinter as tk
-from tkinter import scrolledtext, simpledialog, messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import threading
 import time
@@ -9,17 +8,19 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from utils import log
 import os
+from tkinter import scrolledtext, simpledialog, messagebox, Toplevel
+import signal
 
 BOOTSTRAP_IP = "127.0.0.1"
 BOOTSTRAP_PORT = 5000
 PREFIX = "[NETWORK]: "
 
 class ChordGUI:
-    def __init__(self, root):
+    def __init__(self, root, startup_nodes):
         self.root = root
-        self.root.title("Chord Network Simulator")
-
-        self.network = ChordNetwork(BOOTSTRAP_IP, BOOTSTRAP_PORT, self)
+        self.root.title("Chordify Network")
+        self.root.protocol("WM_DELETE_WINDOW", self.exit_network)
+        self.network = ChordNetwork(BOOTSTRAP_IP, BOOTSTRAP_PORT, startup_nodes=startup_nodes, gui=self)
         self.create_widgets()
         self.create_visualization()
 
@@ -29,7 +30,8 @@ class ChordGUI:
 
         tk.Button(button_frame, text="Join Node", command=self.join_node).grid(row=0, column=0, padx=10)
         tk.Button(button_frame, text="Depart Node", command=self.depart_node).grid(row=0, column=1, padx=10)
-        tk.Button(button_frame, text="Exit", command=self.exit_network).grid(row=0, column=2, padx=10)
+        tk.Button(button_frame, text="Refresh Graph", command=self.update_visualization).grid(row=0, column=2, padx=10)
+        tk.Button(button_frame, text="Exit", command=self.exit_network).grid(row=0, column=3, padx=10)
 
         self.log_box = scrolledtext.ScrolledText(self.root, width=80, height=10, wrap=tk.WORD)
         self.log_box.pack(pady=10)
@@ -43,6 +45,31 @@ class ChordGUI:
 
         self.network.visualize_chord_ring(ax=self.ax)
         self.canvas.draw()
+        self.canvas.mpl_connect("button_press_event", self.on_node_click)
+
+    def on_node_click(self, event):
+        if event.inaxes != self.ax:
+            return
+        if not hasattr(self.network, 'node_positions'):
+            return
+        threshold = 0.1
+        for node_id, pos in self.network.node_positions.items():
+            dx = event.xdata - pos[0]
+            dy = event.ydata - pos[1]
+            if (dx ** 2 + dy ** 2) ** 0.5 < threshold:
+                node_obj = self.network.nodes[node_id]
+                keys = getattr(node_obj, 'data', None)
+                keys_str = "\n".join(map(str, keys)) if keys else "No keys"
+
+                key_window = Toplevel(self.root)
+                key_window.title(f"Node {str(node_id)[-4:]} Keys")
+                key_window.geometry("400x300")
+
+                text_widget = scrolledtext.ScrolledText(key_window, width=50, height=15, wrap=tk.WORD)
+                text_widget.pack(pady=10, padx=10)
+                text_widget.insert(tk.END, keys_str)
+                text_widget.config(state=tk.DISABLED)
+                break
 
     def log_message(self, message):
         """ Append message to the log box """
@@ -51,7 +78,6 @@ class ChordGUI:
 
     def join_node(self):
         """ Joins a new node dynamically """
-        # port = simpledialog.askinteger("Join Node", "Enter Port Number:", minvalue=5001, maxvalue=65535)
         port = self.network.next_port
         self.network.next_port += 1
 
@@ -77,9 +103,11 @@ class ChordGUI:
             else:
                 self.log_message(f"No node found with Short ID: {short_id}.")
 
-    def exit_network(self):
+    def exit_network(self, ask=False):
         """ Cleanly exits the Chord network and waits for all nodes to depart """
-        if messagebox.askyesno("Exit", "Are you sure you want to exit?"):
+        try:
+            if ask and not messagebox.askyesno("Exit", "Are you sure you want to exit?"):
+                return
 
             self.log_message("Will initiate deportation...")
             self.network.depart_all_nodes()
@@ -90,6 +118,9 @@ class ChordGUI:
             self.root.destroy()
 
             os._exit(0)
+        except Exception as e:
+            self.log_message(f"Error during exit: {e}")
+            os._exit(1)
 
     def update_visualization(self):
         """ Updates the network visualization in the GUI """
@@ -98,24 +129,35 @@ class ChordGUI:
         self.canvas.draw()  # Refresh the canvas
 
 class ChordNetwork:
-    def __init__(self, bootstrap_ip, bootstrap_port, gui):
-        self.gui = gui  # Reference to the GUI for visualization updates
+    def __init__(self, bootstrap_ip, bootstrap_port, startup_nodes, gui):
+        self.gui = gui
         self.bootstrap_node = Node(bootstrap_ip, bootstrap_port, bootstrap=True)
         self.nodes = {self.bootstrap_node.node_id: self.bootstrap_node}
         self.next_port = bootstrap_port + 1
         threading.Thread(target=self.bootstrap_node.start_server).start()
 
-    def join_node(self, ip, port):
+        if num_nodes > 0:
+            threading.Thread(target=self.init_nodes_async, args=(num_nodes,), daemon=True).start()
+
+    def init_nodes_async(self, num_nodes):
+        """ Asynchronously join `num_nodes` to the network without blocking GUI """
+        for _ in range(num_nodes):
+            self.join_node(BOOTSTRAP_IP, self.next_port, silent=True)
+            self.next_port += 1
+            time.sleep(0.3)
+            self.gui.update_visualization()
+
+    def join_node(self, ip, port, silent=False):
         """ Joins a new node and updates the network """
         new_node = Node(ip, port)
         threading.Thread(target=new_node.start_server).start()
         new_node.join(self.bootstrap_node.ip, self.bootstrap_node.port)
         self.nodes[new_node.node_id] = new_node
-        if self.gui:
+        if not silent and self.gui:
             self.gui.log_message(f"Joining node {new_node.node_id} at {ip}:{port}")
         log(PREFIX, f"Node {new_node.node_id} joined at {ip}:{port}")
 
-        if self.gui:
+        if not silent and self.gui:
             self.gui.update_visualization()  # Update overlay
 
     def depart_node(self, node_id):
@@ -136,8 +178,7 @@ class ChordNetwork:
 
     def visualize_chord_ring(self, ax):
         """ Draw the Chord ring in the given Matplotlib Axes """
-        nodes_sorted = sorted(self.nodes.items(), reverse=True)
-
+        nodes_sorted = sorted(self.nodes.items(), key=lambda x: x[1].port)
         G = nx.DiGraph()
         labels = {}
 
@@ -146,27 +187,25 @@ class ChordNetwork:
             G.add_edge(node_id, successor)
             labels[node_id] = f"{str(node_id)[-4:]}|{str(node.port)[-2:]}"
 
-        # Increase figure size and margins to avoid cropping
-        ax.set_xlim(-1.2, 1.2)  # Increase limits for more space
+        ax.set_xlim(-1.2, 1.2)
         ax.set_ylim(-1.2, 1.2)
-
-        # Add extra padding to avoid clipping
         ax.margins(0.2)
 
-        # Draw network with better spacing
-        pos = nx.circular_layout(G)  # Use circular layout
-        nx.draw(G, pos, with_labels=True, labels=labels, node_size=800, node_color="lightblue",
-                edge_color="gray", font_size=6, arrowsize=10, ax=ax)
+        pos = nx.circular_layout(G)
+        self.node_positions = pos
+        nx.draw(G, pos, with_labels=True, labels=labels, node_size=800, node_color="lightblue", edge_color="gray",
+                font_size=6, arrowsize=10, ax=ax)
 
-        # Ensure all labels are fully visible
         for node, (x, y) in pos.items():
-            ax.text(x, y, labels[node], fontsize=6, ha='center', va='center')
+            key_count = len(getattr(self.nodes[node], 'data', []))
+            ax.text(x + 0.12, y + 0.15, str(key_count), fontsize=7, fontweight='bold', color='white',
+                    ha='center', va='center', bbox=dict(facecolor='black', edgecolor='black',
+                                                        boxstyle='round,pad=0.5', alpha=0.75))
 
     def depart_all_nodes(self):
         """ Departs all nodes from the network """
         log(PREFIX, "Departing all nodes...")
         for node_id in list(self.nodes.keys()):
-            # self.gui.log_message(f"Departing node {node_id}...")
             departed = self.depart_node(node_id)
             if self.gui:
                 self.gui.log_message(f"Departed Node: {str(node_id)[-4:]}" if departed else f"Failed to depart Node: {str(node_id)[-4:]}")
@@ -179,8 +218,8 @@ class ChordNetwork:
         log(PREFIX, "Chord Network initialized with bootstrap node.")
         time.sleep(2)
         readline.set_history_length(100)  # Store up to 100 commands in history
-        while True:
-            try:
+        try:
+            while True:
                 command = input("> ").strip().split()
                 if len(command) == 0:
                     continue
@@ -214,29 +253,49 @@ class ChordNetwork:
                     os._exit(0)
                 else:
                     log(PREFIX, "Invalid command. Type 'help' for usage.")
-
-            except KeyboardInterrupt:
-                log(PREFIX, "\nExiting Chord Network.")
-                self.depart_all_nodes()
-                log(PREFIX, "All nodes have departed. Exiting...")
-                break
+        except KeyboardInterrupt:
+            log(PREFIX, "\nReceived KeyboardInterrupt. Exiting Chord Network gracefully.")
+            self.depart_all_nodes()
+            log(PREFIX, "All nodes have departed. Exiting...")
+            os._exit(0)
 
 import sys
 
 if __name__ == "__main__":
     mode = "--gui"
+    num_nodes = 0
 
     if len(sys.argv) > 1:
         mode = sys.argv[1].lower()
 
+    if len(sys.argv) > 2:
+        try:
+            num_nodes = int(sys.argv[2])
+        except ValueError:
+            print("Invalid number of nodes! Using default (0).")
+
     if mode == "--cli":
         log(PREFIX, "Starting Chord Network in CLI mode...")
-        network = ChordNetwork(BOOTSTRAP_IP, BOOTSTRAP_PORT, gui=None)
+        network = ChordNetwork(BOOTSTRAP_IP, BOOTSTRAP_PORT, startup_nodes=num_nodes, gui=None)
         network.cli()
     elif mode == "--gui":
         log(PREFIX, "Starting Chord Network in GUI mode...")
         root = tk.Tk()
-        app = ChordGUI(root)
+        app = ChordGUI(root, startup_nodes=num_nodes)
+
+        # handle Control-C taps and gracefully exit in a fast manner
+        exit_requested = False
+        def handle_sigint(signum, frame):
+            global exit_requested
+            exit_requested = True
+        signal.signal(signal.SIGINT, handle_sigint)
+        def check_exit():
+            if exit_requested:
+                app.exit_network(ask=False)
+            else:
+                root.after(100, check_exit)
+        root.after(100, check_exit)
+
         root.mainloop()
     else:
         print("Invalid mode! Use '--cli' for CLI mode or '--gui' for GUI mode.")

@@ -3,7 +3,7 @@
 ## CLI Mode
 Run in CLI mode:
 ```sh
-python3 chord_network.py --cli
+python3 chord_network.py --cli <num_nodes>
 ```
 
 ### Commands
@@ -17,7 +17,7 @@ python3 chord_network.py --cli
 ## GUI Mode
 Run in GUI mode:
 ```sh
-python3 chord_network.py --gui
+python3 chord_network.py --gui <num_nodes>
 ```
 
 ### Features
@@ -28,3 +28,19 @@ python3 chord_network.py --gui
   - **Node Labels**: `short_id | last2_port_digits`  
      _(e.g., Node ID: `135117988181535955003563159026686220824819050071` & Port: `5001` → Label: `0071|01`)_  
      We follow this format to keep visualization simple, yet informative.
+  - **Clickable Nodes**: Click on a node in the visualization to see stored keys.
+  - **Key Count Display**: Each node displays the number of stored keys near it.
+
+## Client CLI
+The `client.py` script allows interaction with the Chord network using commands like `insert`, `query`, and `delete`.
+
+### Running the Client
+1. **Start the Chord network first** using either CLI or GUI mode.
+2. **Run the client script**:
+   ```sh
+   python3 client.py
+   ```
+
+### Bulk Insert from Files
+- The client automatically processes `insert_*.txt` files from the `insert/` directory.
+- After the client finishes populating the nodes, tap the **Refresh** button to display the latest node storage information.

@@ -2,7 +2,7 @@ import socket
 import threading
 import time
 
-from utils import hash_key, log
+from utils import hash_key, log, custom_split
 
 class Node:
     def __init__(self, ip, port, bootstrap = False):
@@ -34,79 +34,84 @@ class Node:
             threading.Thread(target=self.handle_request, args=(client,)).start()
 
     def handle_request(self, client):
-        request = client.recv(1024).decode().strip()
-        parts = request.split()
-        if not parts:
+        try:
+
+            request = client.recv(1024).decode().strip()
+            parts = custom_split(request)
+            command = parts[0].lower()
+
+            if command == "find_successor":
+                node_id = int(parts[1])
+                successor = self.find_successor(node_id)
+                response = f"{successor.ip}:{successor.port}"
+            elif command == "get_predecessor":
+                response = f"{self.predecessor.ip}:{self.predecessor.port}" if self.predecessor and self.predecessor != self else "None"
+            elif command == "update_predecessor":
+                if len(parts) >= 3:
+                    self.log(f"Updating predecessor {parts}")
+                    try:
+                        pred_ip = parts[1]
+                        pred_port = int(parts[2])
+                        self.predecessor = Node(pred_ip, pred_port)
+                        self.log(f"Predecessor updated to {self.predecessor.node_id}")
+                        response = "Predecessor updated"
+                    except ValueError:
+                        self.log(f"ValueError while updating predecessor: {parts}")
+                        response = "ERROR: Invalid predecessor format"
+                else:
+                    response = "ERROR: Malformed update_predecessor command"
+            elif command == "update_successor":
+                if len(parts) >= 3:
+                    self.log(f"Updating successor {parts}")
+                    try:
+                        succ_ip = parts[1]
+                        succ_port = int(parts[2])
+                        self.successor = Node(succ_ip, succ_port)
+                        self.log(f"Successor updated to {self.successor.node_id}")
+                        response = "Successor updated"
+                    except ValueError:
+                        self.log(f"ValueError while updating successor: {parts}")
+                        response = "ERROR: Invalid successor format"
+                else:
+                    response = "ERROR: Malformed update_successor command"
+            elif command == "transfer_keys":
+                transfer_data = {key: value for key, value in self.data.items() if hash_key(key) <= self.node_id}
+                self.data = {k: v for k, v in self.data.items() if k not in transfer_data}  # Remove transferred keys
+                response = str(transfer_data)
+            elif command == "receive_keys":
+                keys_data = eval(" ".join(parts[1:]))  # Convert back to dictionary
+                self.data.update(keys_data)
+                response = "Keys received"
+
+            elif command == "insert" and len(parts) == 3:
+                key, value = parts[1], parts[2]
+                self.insert(key, value)
+                response = f"Inserted key {key} with value {value}"
+            elif command == "query" and len(parts) == 2:
+                key = parts[1]
+                response = f"{self.query(key)}"
+            elif command == "delete" and len(parts) == 2:
+                key = parts[1]
+                response = f"Deleted key {key}" if self.delete(key) else "Key not found"
+            elif command == "join":
+                # Handling join request
+                joining_ip, joining_port = parts[1], int(parts[2])
+                response = self.handle_join_request(joining_ip, joining_port)
+            else:
+                response = "Invalid command"
+
+            client.send(response.encode())
+        except Exception as e:
+            self.log(f"ERROR: Exception in handle_request: {e}")
+            client.send("ERROR: Internal server error".encode())
+        finally:
             client.close()
-            return
-        command = parts[0].lower()
-
-        if command == "find_successor":
-            node_id = int(parts[1])
-            successor = self.find_successor(node_id)
-            response = f"{successor.ip}:{successor.port}"
-        elif command == "get_predecessor":
-            response = f"{self.predecessor.ip}:{self.predecessor.port}" if self.predecessor and self.predecessor != self else "None"
-        elif command == "update_predecessor":
-            if len(parts) >= 3:
-                self.log(f"Updating predecessor {parts}")
-                try:
-                    pred_ip = parts[1]
-                    pred_port = int(parts[2])
-                    self.predecessor = Node(pred_ip, pred_port)
-                    self.log(f"Predecessor updated to {self.predecessor.node_id}")
-                    response = "Predecessor updated"
-                except ValueError:
-                    self.log(f"ValueError while updating predecessor: {parts}")
-                    response = "ERROR: Invalid predecessor format"
-            else:
-                response = "ERROR: Malformed update_predecessor command"
-        elif command == "update_successor":
-            if len(parts) >= 3:
-                self.log(f"Updating successor {parts}")
-                try:
-                    succ_ip = parts[1]
-                    succ_port = int(parts[2])
-                    self.successor = Node(succ_ip, succ_port)
-                    self.log(f"Successor updated to {self.successor.node_id}")
-                    response = "Successor updated"
-                except ValueError:
-                    self.log(f"ValueError while updating successor: {parts}")
-                    response = "ERROR: Invalid successor format"
-            else:
-                response = "ERROR: Malformed update_successor command"
-        elif command == "transfer_keys":
-            transfer_data = {key: value for key, value in self.data.items() if hash_key(key) <= self.node_id}
-            self.data = {k: v for k, v in self.data.items() if k not in transfer_data}  # Remove transferred keys
-            response = str(transfer_data)
-        elif command == "receive_keys":
-            keys_data = eval(" ".join(parts[1:]))  # Convert back to dictionary
-            self.data.update(keys_data)
-            response = "Keys received"
-
-        elif command == "insert" and len(parts) == 3:
-            key, value = parts[1], parts[2]
-            self.insert(key, value)
-            response = f"Inserted key {key} with value {value}"
-        elif command == "query" and len(parts) == 2:
-            key = parts[1]
-            response = f"{self.query(key)}"
-        elif command == "delete" and len(parts) == 2:
-            key = parts[1]
-            response = f"Deleted key {key}" if self.delete(key) else "Key not found"
-        elif command == "join":
-            # Handling join request
-            joining_ip, joining_port = parts[1], int(parts[2])
-            response = self.handle_join_request(joining_ip, joining_port)
-        else:
-            response = "Invalid command"
-
-        client.send(response.encode())
-        client.close()
 
     def insert(self, key, value):
         hashed_key = hash_key(key)
+
         if self.responsible_for(hashed_key):
+            self.log(f"Responsible for key {key}")
             if key in self.data:
                 # no duplicates
                 existing_values = self.data[key].split(", ")
@@ -116,7 +121,8 @@ class Node:
             else:
                 self.data[key] = value
         else:
-            self.forward_request("insert", key, value)
+            # self.log(f"Forwarding key {key} to successor {str(self.successor.node_id)[-4:]}")
+            response = self.forward_request("insert", key, value)
 
     def query(self, key):
         hashed_key = hash_key(key)
@@ -140,10 +146,21 @@ class Node:
             response = client.recv(1024).decode()
             return response
 
-    def responsible_for(self, hashed_key):
-        if self.predecessor is None:
+    def responsible_for(self, key_hash):
+        """Check if this node is responsible for a given hashed key."""
+        pred_id = self.predecessor.node_id if self.predecessor else None
+        node_id = self.node_id
+
+        # Single node case
+        if pred_id is None or pred_id == node_id:
             return True
-        return self.predecessor.node_id < hashed_key <= self.node_id
+
+        # Normal case: predecessor < node_id
+        if pred_id < node_id:
+            return pred_id < key_hash <= node_id
+
+        # Wrap-around case: predecessor > node_id (means we're at the 0-boundary)
+        return key_hash > pred_id or key_hash <= node_id
 
     def handle_join_request(self, joining_ip, joining_port):
         # Simple logic to update successor/predecessor on join

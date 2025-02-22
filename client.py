@@ -1,6 +1,8 @@
+import os
 import socket
 import readline  # Enables history and arrow navigation
-
+import time
+from tqdm import tqdm  # ✅ Progress bar
 
 def send_command(command):
     try:
@@ -11,7 +13,6 @@ def send_command(command):
             print(f"Response: {response}")
     except Exception as e:
         print(f"Error: {e}")
-
 
 def validate_command(command):
     parts = command.split()
@@ -36,12 +37,44 @@ def validate_command(command):
 
     return True, ""
 
+def process_insert_directory(directory):
+    if not os.path.exists(directory) or not os.path.isdir(directory):
+        print(f"Error: Directory '{directory}' does not exist.")
+        return
+
+    insert_files = sorted(f for f in os.listdir(directory) if f.startswith("insert_") and f.endswith(".txt"))
+
+    total_files = len(insert_files)
+    if total_files == 0:
+        print("No insert files found.")
+        return
+
+    print(f"Processing {total_files} insert files...\n")
+
+    # ✅ Iterate over files with progress bar
+    for filename in tqdm(insert_files, desc="Processing Files", unit="file", ncols=80):
+        filepath = os.path.join(directory, filename)
+        try:
+            with open(filepath, 'r', encoding='utf-8') as file:
+                value = filename.split('_')[1]  # Extract number part
+                keys = [line.strip() for line in file if line.strip()]
+
+                # ✅ Use tqdm to show progress per file
+                for key in tqdm(keys, desc=f"  Inserting keys from {filename}", unit="key", leave=False, ncols=80):
+                    command = f"insert \"{key}\" {value}"
+                    send_command(command)
+
+        except Exception as e:
+            print(f"Error processing {filename}: {e}")
 
 if __name__ == "__main__":
     print("Commands: insert <key> <value>, query <key>, delete <key>, help")
 
     # Enable persistent history (up/down arrows)
     readline.set_history_length(100)  # Store up to 100 commands
+
+    insert_dir = "insert"  # Adjust this if needed
+    process_insert_directory(insert_dir)
 
     while True:
         try:
