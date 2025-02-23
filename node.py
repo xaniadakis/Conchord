@@ -111,6 +111,7 @@ class Node:
         hashed_key = hash_key(key)
 
         if self.responsible_for(hashed_key):
+            #print(f"Node {self.node_id} is responsible for key {hashed_key}")
             self.log(f"Responsible for key {key}")
             if key in self.data:
                 # no duplicates
@@ -210,55 +211,58 @@ class Node:
 
     def join(self, bootstrap_ip, bootstrap_port):
         self.log(f"Joining via {bootstrap_ip}:{bootstrap_port}")
-
-        # Step 1: Set the successor as the bootstrap node
-        self.successor = Node(bootstrap_ip, bootstrap_port)
-
-        # Step 2: Get the predecessor of the bootstrap node
+        
+        # Step 1: Find the correct successor based on my ID
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             client.connect((bootstrap_ip, bootstrap_port))
-            client.sendall("get_predecessor".encode())
+            client.sendall(f"find_successor {self.node_id}".encode())  # Ask bootstrap to find successor
+            successor_data = client.recv(1024).decode()
+
+        succ_ip, succ_port = successor_data.split(":")
+        self.successor = Node(succ_ip, int(succ_port))
+
+        # Step 2: Get my correct predecessor (not always bootstrap!)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+            client.connect((self.successor.ip, self.successor.port))
+            client.sendall("get_predecessor".encode())  # Ask successor for its current predecessor
             pred_data = client.recv(1024).decode()
 
-        if pred_data == "None":
-            # Bootstrap is the only node in the system
+        if pred_data == "None":  # Bootstrap node is alone
             self.predecessor = self.successor
 
-            # Update bootstrap's successor to the new node (only one node existed before)
+            # Bootstrap should update its successor!
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
                 client.connect((bootstrap_ip, bootstrap_port))
                 client.sendall(f"update_successor {self.ip} {self.port}".encode())
-
+            
         else:
-            # Step 3: Set predecessor as bootstrap's previous predecessor
             pred_ip, pred_port = pred_data.split(":")
             self.predecessor = Node(pred_ip, int(pred_port))
 
-            # Step 4: Notify the old predecessor to update its successor to this node
+            # Step 3: Notify old predecessor to update its successor to me
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
                 client.connect((self.predecessor.ip, self.predecessor.port))
                 client.sendall(f"update_successor {self.ip} {self.port}".encode())
 
-        # Step 5: Update the bootstrap node’s predecessor to this node
+        # Step 4: Notify my successor to update its predecessor to me
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-            client.connect((bootstrap_ip, bootstrap_port))
+            client.connect((self.successor.ip, self.successor.port))
             client.sendall(f"update_predecessor {self.ip} {self.port}".encode())
-
-        self.log(f"Successfully joined the Chord ring.")
+            self.log(f"Successfully joined the Chord ring.")
 
     def find_successor(self, node_id):
         # Single node in the ring case
         if self.node_id == self.successor.node_id:
             return self
 
-            # If the node ID fits between this node and its successor, return the successor
+        # If the node ID fits between this node and its successor, return the successor
         if self.node_id < node_id <= self.successor.node_id:
             return self.successor
 
         # Handle wrap-around case when IDs roll over the hash range
-        if self.predecessor.node_id > self.node_id:
+        if self.node_id > self.successor.node_id:
             if node_id > self.node_id or node_id <= self.successor.node_id:
-                return self.successor
+                return self.successor          
 
         # Forward request to next node
         try:

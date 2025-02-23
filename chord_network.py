@@ -32,10 +32,17 @@ class ChordGUI:
         tk.Button(button_frame, text="Depart Node", command=self.depart_node).grid(row=0, column=1, padx=10)
         tk.Button(button_frame, text="Refresh Graph", command=self.update_visualization).grid(row=0, column=2, padx=10)
         tk.Button(button_frame, text="Exit", command=self.exit_network).grid(row=0, column=3, padx=10)
+        tk.Button(button_frame, text="Show Node IDs", command=self.show_node_ids).grid(row=0, column=4, padx=10)
+
 
         self.log_box = scrolledtext.ScrolledText(self.root, width=80, height=10, wrap=tk.WORD)
         self.log_box.pack(pady=10)
         self.log_message("Chord Network Initialized.")
+
+    def show_node_ids(self):
+        """Displays the list of existing node IDs in the log box."""
+        node_ids = self.network.get_node_ids()
+        self.log_message(f"Existing Node IDs: {node_ids}")
 
     def create_visualization(self):
         """ Create a Matplotlib canvas inside Tkinter to display the network overlay """
@@ -147,6 +154,10 @@ class ChordNetwork:
             time.sleep(0.3)
             self.gui.update_visualization()
 
+    def get_node_ids(self):
+        """Returns a list of existing node IDs."""
+        return sorted(list(self.nodes.keys()))
+
     def join_node(self, ip, port, silent=False):
         """ Joins a new node and updates the network """
         new_node = Node(ip, port)
@@ -178,7 +189,7 @@ class ChordNetwork:
 
     def visualize_chord_ring(self, ax):
         """ Draw the Chord ring in the given Matplotlib Axes """
-        nodes_sorted = sorted(self.nodes.items(), key=lambda x: x[1].port)
+        nodes_sorted = sorted(self.nodes.items(), key=lambda x: x[1].node_id)
         G = nx.DiGraph()
         labels = {}
 
