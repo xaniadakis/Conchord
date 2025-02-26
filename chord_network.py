@@ -152,7 +152,8 @@ class ChordNetwork:
             self.join_node(BOOTSTRAP_IP, self.next_port, silent=True)
             self.next_port += 1
             time.sleep(0.3)
-            self.gui.update_visualization()
+            if self.gui:
+                self.gui.update_visualization()
 
     def get_node_ids(self):
         """Returns a list of existing node IDs."""
