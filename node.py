@@ -5,7 +5,7 @@ import time
 from utils import hash_key, log, custom_split
 
 class Node:
-    def __init__(self, ip, port, bootstrap = False):
+    def __init__(self, ip, port, bootstrap = False, replication_factor=3, consistency="chain"):
         self.ip = ip
         self.port = port
         self.node_id = hash_key(f"{ip}:{port}")
@@ -17,6 +17,8 @@ class Node:
             self.prefix = f"[NODE {str(self.node_id)[-4:]}]: "
         else:
             self.prefix = "[BOOTSTRAP NODE]: "
+        self.replication_factor = replication_factor  # k replicas
+        self.consistency = consistency
 
     def log(self, output=None):
         log(prefix=self.prefix, output=output)
@@ -83,10 +85,17 @@ class Node:
                 self.data.update(keys_data)
                 response = "Keys received"
 
-            elif command == "insert" and len(parts) == 3:
+            elif command == "insert":
                 key, value = parts[1], parts[2]
-                self.insert(key, value)
-                response = f"Inserted key {key} with value {value}"
+                if len(parts) == 4:
+                    replica_count = int(parts[3])
+                else:
+                    replica_count = 0
+                if replica_count >= self.replication_factor:
+                    response = "Replication limit reached"
+                else:
+                    self.insert(key, value, replica_count)
+                    response = f"Inserted key {key} with value {value}"
             elif command == "query" and len(parts) == 2:
                 key = parts[1]
                 response = f"{self.query(key)}"
@@ -107,12 +116,13 @@ class Node:
         finally:
             client.close()
 
-    def insert(self, key, value):
+    def insert(self, key, value, replica_count=0):
         hashed_key = hash_key(key)
 
-        if self.responsible_for(hashed_key):
+        if self.responsible_for(hashed_key) or replica_count>0:
             #print(f"Node {self.node_id} is responsible for key {hashed_key}")
-            self.log(f"Responsible for key {key}")
+            if replica_count==0:
+                self.log(f"Responsible for key {key}")
             if key in self.data:
                 # no duplicates
                 existing_values = self.data[key].split(", ")
@@ -121,28 +131,83 @@ class Node:
                     self.data[key] += f", {value}"
             else:
                 self.data[key] = value
+            if replica_count<self.replication_factor-1:
+                if self.consistency == "chain":
+                    self.chain_replicate("insert", key, value, replica_count)
+                elif self.consistency == "eventual":
+                    threading.Thread(target=self.eventual_replicate, args=("insert", key, value, replica_count)).start()
+
         else:
             # self.log(f"Forwarding key {key} to successor {str(self.successor.node_id)[-4:]}")
             response = self.forward_request("insert", key, value)
 
-    def query(self, key):
+    def query(self, key, hops=0):
+        """Handles queries based on consistency model."""
         hashed_key = hash_key(key)
-        if self.responsible_for(hashed_key):
-            return self.data.get(key, "Key not found")
-        else:
-            return self.forward_request("query", key)
 
-    def delete(self, key):
+        if self.consistency == "chain":
+            if hops >= self.replication_factor - 1:
+                return self.data.get(key, "Key not found")  # Tail node returns value
+            return self.forward_request("query", key, hops=hops + 1)  # Forward to next
+
+        elif self.consistency == "eventual":
+            updated_hops = 0
+            if self.responsible_for(hashed_key):
+                if key in self.data:
+                    return self.data[key]
+                else:
+                    updated_hops = hops + 1
+            return self.forward_request("query", key, hops=updated_hops)  # Try next replica
+
+        return "Key not found"
+
+    def delete(self, key, is_replica=False):
         hashed_key = hash_key(key)
-        if self.responsible_for(hashed_key):
-            return self.data.pop(key, None)
+        if self.responsible_for(hashed_key) or is_replica:
+            # return self.data.pop(key, None)
+            self.log(f"Deleting key {key} {'(replica)' if is_replica else ''}")
+            self.data.pop(key, None)
+
+            if not is_replica:
+                if self.consistency == "chain":
+                    self.chain_replicate("delete", key, None, 1)
+                elif self.consistency == "eventual":
+                    threading.Thread(target=self.eventual_replicate, args=("delete", key, None, 1)).start()
         else:
             return self.forward_request("delete", key)
 
-    def forward_request(self, command, key, value=None):
+    def chain_replicate(self, command, key, value, replica_count):
+        """Passes replication baton strictly to the next successor in chain."""
+        if replica_count >= self.replication_factor - 1:
+            return
+
+        successor = self.successor
+
+        if successor:
+            self.log(f"Passing replication baton from {self.ip}:{self.port} to {successor.ip}:{successor.port} for key {key} and rc: {replica_count + 1}")
+            successor.forward_request(command, key, value, replica_count=replica_count + 1)
+
+    def eventual_replicate(self, command, key, value, replica_count):
+        """Lazy baton-passing replication (eventual consistency)."""
+        if replica_count >= self.replication_factor:
+            return
+
+        successor = self.successor
+        if successor:
+            time.sleep(0.1)  # Simulate async delay
+            self.log(f"Lazy forwarding to {successor.ip}:{successor.port} for key {key}")
+            successor.forward_request(command, key, value, replica_count=replica_count + 1)
+
+    def forward_request(self, command, key, value=None, replica_count=0, hops=0):
+        """Forwards request to successor, passing the baton along."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             client.connect((self.successor.ip, self.successor.port))
             message = f"{command} {key}" if value is None else f"{command} {key} {value}"
+            if replica_count > 0:
+                message += f" {replica_count}"
+            if hops > 0:
+                message += f" {hops}"
+
             client.sendall(message.encode())
             response = client.recv(1024).decode()
             return response

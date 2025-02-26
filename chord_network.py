@@ -14,6 +14,7 @@ import signal
 BOOTSTRAP_IP = "127.0.0.1"
 BOOTSTRAP_PORT = 5000
 PREFIX = "[NETWORK]: "
+REPLICATION_FACTOR = 4
 
 class ChordGUI:
     def __init__(self, root, startup_nodes):
@@ -138,7 +139,7 @@ class ChordGUI:
 class ChordNetwork:
     def __init__(self, bootstrap_ip, bootstrap_port, startup_nodes, gui):
         self.gui = gui
-        self.bootstrap_node = Node(bootstrap_ip, bootstrap_port, bootstrap=True)
+        self.bootstrap_node = Node(ip=bootstrap_ip, port=bootstrap_port, bootstrap=True, replication_factor=REPLICATION_FACTOR)
         self.nodes = {self.bootstrap_node.node_id: self.bootstrap_node}
         self.next_port = bootstrap_port + 1
         threading.Thread(target=self.bootstrap_node.start_server).start()
@@ -160,7 +161,7 @@ class ChordNetwork:
 
     def join_node(self, ip, port, silent=False):
         """ Joins a new node and updates the network """
-        new_node = Node(ip, port)
+        new_node = Node(ip=ip, port=port, replication_factor=REPLICATION_FACTOR, consistency="chain")
         threading.Thread(target=new_node.start_server).start()
         new_node.join(self.bootstrap_node.ip, self.bootstrap_node.port)
         self.nodes[new_node.node_id] = new_node
