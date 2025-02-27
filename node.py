@@ -99,9 +99,16 @@ class Node:
             elif command == "query" and len(parts) == 2:
                 key = parts[1]
                 response = f"{self.query(key)}"
-            elif command == "delete" and len(parts) == 2:
+            elif command == "delete":
                 key = parts[1]
-                response = f"Deleted key {key}" if self.delete(key) else "Key not found"
+                if len(parts) == 3:
+                    replica_count = int(parts[2])
+                else:
+                    replica_count = 0
+                if replica_count >= self.replication_factor:
+                    response = "Replication limit reached"
+                else:
+                    response = f"Deleted key {key}" if self.delete(key, replica_count) else "Key not found"
             elif command == "join":
                 # Handling join request
                 joining_ip, joining_port = parts[1], int(parts[2])
@@ -161,18 +168,17 @@ class Node:
 
         return "Key not found"
 
-    def delete(self, key, is_replica=False):
+    def delete(self, key, replica_count=0):
         hashed_key = hash_key(key)
-        if self.responsible_for(hashed_key) or is_replica:
-            # return self.data.pop(key, None)
-            self.log(f"Deleting key {key} {'(replica)' if is_replica else ''}")
+        if self.responsible_for(hashed_key) or replica_count > 0:
+            self.log(f"Deleting key {key} {f'(replica {replica_count})' if replica_count>0 else ''}")
             self.data.pop(key, None)
 
-            if not is_replica:
+            if replica_count < self.replication_factor - 1:
                 if self.consistency == "chain":
-                    self.chain_replicate("delete", key, None, 1)
+                    self.chain_replicate("delete", key, None, replica_count)
                 elif self.consistency == "eventual":
-                    threading.Thread(target=self.eventual_replicate, args=("delete", key, None, 1)).start()
+                    threading.Thread(target=self.eventual_replicate, args=("delete", key, None, replica_count)).start()
         else:
             return self.forward_request("delete", key)
 
@@ -182,7 +188,6 @@ class Node:
             return
 
         successor = self.successor
-
         if successor:
             self.log(f"Passing replication baton from {self.ip}:{self.port} to {successor.ip}:{successor.port} for key {key} and rc: {replica_count + 1}")
             successor.forward_request(command, key, value, replica_count=replica_count + 1)
