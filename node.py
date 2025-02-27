@@ -111,7 +111,7 @@ class Node:
                 if replica_count >= self.replication_factor:
                     response = "Replication limit reached"
                 else:
-                    return self.delete(key, replica_count)
+                    response = self.delete(key, replica_count)
             elif command == "join":
                 # Handling join request
                 joining_ip, joining_port = parts[1], int(parts[2])
