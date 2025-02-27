@@ -3,6 +3,7 @@ import socket
 import readline  # Enables history and arrow navigation
 import time
 from tqdm import tqdm  # ✅ Progress bar
+from utils import custom_split
 
 def send_command(command):
     try:
@@ -15,7 +16,8 @@ def send_command(command):
         print(f"Error: {e}")
 
 def validate_command(command):
-    parts = command.split()
+    # parts = command.split()
+    parts = custom_split(command)
     commands_usage = {
         "insert": "Usage: insert <key> <value>",
         "query": "Usage: query <key>",

@@ -94,11 +94,14 @@ class Node:
                 if replica_count >= self.replication_factor:
                     response = "Replication limit reached"
                 else:
-                    self.insert(key, value, replica_count)
-                    response = f"Inserted key {key} with value {value}"
-            elif command == "query" and len(parts) == 2:
+                    response = self.insert(key, value, replica_count) or "ERROR: Insert failed"
+            elif command == "query":
                 key = parts[1]
-                response = f"{self.query(key)}"
+                if len(parts) == 3:
+                    hops = int(parts[2])
+                else:
+                    hops = 0
+                response = f"{self.query(key, hops=hops)}"
             elif command == "delete":
                 key = parts[1]
                 if len(parts) == 3:
@@ -108,13 +111,13 @@ class Node:
                 if replica_count >= self.replication_factor:
                     response = "Replication limit reached"
                 else:
-                    response = f"Deleted key {key}" if self.delete(key, replica_count) else "Key not found"
+                    return self.delete(key, replica_count)
             elif command == "join":
                 # Handling join request
                 joining_ip, joining_port = parts[1], int(parts[2])
                 response = self.handle_join_request(joining_ip, joining_port)
             else:
-                response = "Invalid command"
+                response = f"Invalid command: {", ".join(parts)}"
 
             client.send(response.encode())
         except Exception as e:
@@ -130,7 +133,7 @@ class Node:
             #print(f"Node {self.node_id} is responsible for key {hashed_key}")
             if replica_count==0:
                 self.log(f"Responsible for key {key}")
-            if key in self.data:
+            if key in self.data.keys():
                 # no duplicates
                 existing_values = self.data[key].split(", ")
                 # concatenate for update
@@ -138,34 +141,37 @@ class Node:
                     self.data[key] += f", {value}"
             else:
                 self.data[key] = value
-            if replica_count<self.replication_factor-1:
+            if replica_count < self.replication_factor - 1:
                 if self.consistency == "chain":
-                    self.chain_replicate("insert", key, value, replica_count)
+                    return self.chain_replicate("insert", key, value, replica_count)
                 elif self.consistency == "eventual":
                     threading.Thread(target=self.eventual_replicate, args=("insert", key, value, replica_count)).start()
-
+                    return f"{self.prefix} Inserted {key}: {value}"
+            elif replica_count == self.replication_factor - 1:
+                self.log(f"Tail received baton for key {key}")
+                if self.consistency == "chain":
+                    return f"{self.prefix}Inserted {key}: {value}"
         else:
             # self.log(f"Forwarding key {key} to successor {str(self.successor.node_id)[-4:]}")
-            response = self.forward_request("insert", key, value)
+            return self.forward_request("insert", key, value)
 
     def query(self, key, hops=0):
         """Handles queries based on consistency model."""
         hashed_key = hash_key(key)
 
         if self.consistency == "chain":
-            if hops >= self.replication_factor - 1:
-                return self.data.get(key, "Key not found")  # Tail node returns value
-            return self.forward_request("query", key, hops=hops + 1)  # Forward to next
-
+            if self.responsible_for(hashed_key) or hops > 0:
+                if hops < self.replication_factor - 1:
+                    return self.forward_request("query", key, hops=hops + 1)
+                self.log(f"found {key}")
+                return self.data.get(key, "Key not found")
+            else:
+                return self.forward_request("query", key)
         elif self.consistency == "eventual":
-            updated_hops = 0
-            if self.responsible_for(hashed_key):
-                if key in self.data:
-                    return self.data[key]
-                else:
-                    updated_hops = hops + 1
-            return self.forward_request("query", key, hops=updated_hops)  # Try next replica
-
+            if key in self.data.keys():
+                self.log(f"found {key}")
+                return self.data[key]
+            return self.forward_request("query", key, hops=hops + 1)
         return "Key not found"
 
     def delete(self, key, replica_count=0):
@@ -176,26 +182,31 @@ class Node:
 
             if replica_count < self.replication_factor - 1:
                 if self.consistency == "chain":
-                    self.chain_replicate("delete", key, None, replica_count)
+                    return self.chain_replicate("delete", key, None, replica_count)
                 elif self.consistency == "eventual":
                     threading.Thread(target=self.eventual_replicate, args=("delete", key, None, replica_count)).start()
+                    return f"{self.prefix} Deleted {key}"
+            elif replica_count == self.replication_factor - 1:
+                self.log(f"Tail received baton to delete key {key}")
+                if self.consistency == "chain":
+                    return f"{self.prefix}Deleted {key}"
         else:
             return self.forward_request("delete", key)
 
     def chain_replicate(self, command, key, value, replica_count):
         """Passes replication baton strictly to the next successor in chain."""
-        if replica_count >= self.replication_factor - 1:
-            return
+        # if replica_count >= self.replication_factor - 1:
+        #     return
 
         successor = self.successor
         if successor:
             self.log(f"Passing replication baton from {self.ip}:{self.port} to {successor.ip}:{successor.port} for key {key} and rc: {replica_count + 1}")
-            successor.forward_request(command, key, value, replica_count=replica_count + 1)
+            return successor.forward_request(command, key, value, replica_count=replica_count + 1)
 
     def eventual_replicate(self, command, key, value, replica_count):
         """Lazy baton-passing replication (eventual consistency)."""
-        if replica_count >= self.replication_factor:
-            return
+        # if replica_count >= self.replication_factor - 1:
+        #     return
 
         successor = self.successor
         if successor:

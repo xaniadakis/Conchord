@@ -17,7 +17,17 @@ python3 chord_network.py --cli <num_nodes>
 ## GUI Mode
 Run in GUI mode:
 ```sh
-python3 chord_network.py --gui <num_nodes>
+python3 chord_network.py --m <mode> -i <bootstrap_ip> -p <bootstrap_port> -n <num_nodes> -r <replication_factor> -c <consistency>
+```
+or:
+```sh
+python3 script.py --mode <mode> --bootstrap_ip <bootstrap_ip> --bootstrap_port <bootstrap_port> --num_nodes <num_nodes> --replication_factor <replication_factor> --consistency <consistency>
+```
+
+
+Example:
+```sh
+python3 chord_network.py --mode gui -i 127.0.0.1 -p 5000 -n 5 -r 2 -c eventual
 ```
 
 ### Features

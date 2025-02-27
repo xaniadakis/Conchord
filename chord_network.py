@@ -10,18 +10,25 @@ from utils import log
 import os
 from tkinter import scrolledtext, simpledialog, messagebox, Toplevel
 import signal
+import argparse
 
 BOOTSTRAP_IP = "127.0.0.1"
 BOOTSTRAP_PORT = 5000
+REPLICATION_FACTOR = 1
 PREFIX = "[NETWORK]: "
-REPLICATION_FACTOR = 4
 
 class ChordGUI:
-    def __init__(self, root, startup_nodes):
+    def __init__(self, root, bootstrap_ip, bootstrap_port, startup_nodes, replication_factor, consistency):
         self.root = root
         self.root.title("Chordify Network")
         self.root.protocol("WM_DELETE_WINDOW", self.exit_network)
-        self.network = ChordNetwork(BOOTSTRAP_IP, BOOTSTRAP_PORT, startup_nodes=startup_nodes, gui=self)
+        self.network = ChordNetwork(bootstrap_ip=bootstrap_ip,
+                                    bootstrap_port=bootstrap_port,
+                                    startup_nodes=startup_nodes,
+                                    replication_factor=replication_factor,
+                                    consistency=consistency,
+                                    gui=self)
+        self.bootstrap_ip = bootstrap_ip
         self.create_widgets()
         self.create_visualization()
 
@@ -90,7 +97,7 @@ class ChordGUI:
         self.network.next_port += 1
 
         if port:
-            threading.Thread(target=self.network.join_node, args=(BOOTSTRAP_IP, port)).start()
+            threading.Thread(target=self.network.join_node, args=(self.bootstrap_ip, port)).start()
 
     def depart_node(self):
         """ Departs a node based on user input """
@@ -137,20 +144,32 @@ class ChordGUI:
         self.canvas.draw()  # Refresh the canvas
 
 class ChordNetwork:
-    def __init__(self, bootstrap_ip, bootstrap_port, startup_nodes, gui):
+    def __init__(self, bootstrap_ip, bootstrap_port, startup_nodes, replication_factor, consistency, gui):
         self.gui = gui
-        self.bootstrap_node = Node(ip=bootstrap_ip, port=bootstrap_port, bootstrap=True, replication_factor=REPLICATION_FACTOR)
+        self.bootstrap_node = Node(ip=bootstrap_ip,
+                                   port=bootstrap_port,
+                                   bootstrap=True,
+                                   replication_factor=replication_factor,
+                                   consistency=consistency)
+        self.bootstrap_ip = bootstrap_ip
+        self.replication_factor = replication_factor
+        self.consistency = consistency
+
         self.nodes = {self.bootstrap_node.node_id: self.bootstrap_node}
         self.next_port = bootstrap_port + 1
         threading.Thread(target=self.bootstrap_node.start_server).start()
 
-        if num_nodes > 0:
-            threading.Thread(target=self.init_nodes_async, args=(num_nodes,), daemon=True).start()
+        if startup_nodes > 0:
+            threading.Thread(target=self.init_nodes_async, args=(startup_nodes,), daemon=True).start()
 
     def init_nodes_async(self, num_nodes):
         """ Asynchronously join `num_nodes` to the network without blocking GUI """
         for _ in range(num_nodes):
-            self.join_node(BOOTSTRAP_IP, self.next_port, silent=True)
+            self.join_node(ip=self.bootstrap_ip,
+                           port=self.next_port,
+                           replication_factor=self.replication_factor,
+                           consistency=self.consistency,
+                           silent=True)
             self.next_port += 1
             time.sleep(0.3)
             if self.gui:
@@ -160,9 +179,9 @@ class ChordNetwork:
         """Returns a list of existing node IDs."""
         return sorted(list(self.nodes.keys()))
 
-    def join_node(self, ip, port, silent=False):
+    def join_node(self, ip, port, replication_factor, consistency, silent=False):
         """ Joins a new node and updates the network """
-        new_node = Node(ip=ip, port=port, replication_factor=REPLICATION_FACTOR, consistency="chain")
+        new_node = Node(ip=ip, port=port, replication_factor=replication_factor, consistency=consistency)
         threading.Thread(target=new_node.start_server).start()
         new_node.join(self.bootstrap_node.ip, self.bootstrap_node.port)
         self.nodes[new_node.node_id] = new_node
@@ -189,16 +208,29 @@ class ChordNetwork:
             self.gui.update_visualization()
         return departed
 
+    import networkx as nx
+    import matplotlib.pyplot as plt
+
     def visualize_chord_ring(self, ax):
         """ Draw the Chord ring in the given Matplotlib Axes """
         nodes_sorted = sorted(self.nodes.items(), key=lambda x: x[1].node_id)
         G = nx.DiGraph()
         labels = {}
+        node_colors = []
+        text_colors = {}
 
         for node_id, node in nodes_sorted:
             successor = node.successor.node_id if node.successor else node_id
             G.add_edge(node_id, successor)
             labels[node_id] = f"{str(node_id)[-4:]}|{str(node.port)[-2:]}"
+
+            # Assign colors
+            if node.bootstrap_node:
+                node_colors.append("#BE3144")
+                text_colors[node_id] = "white"
+            else:
+                node_colors.append("lightblue")
+                text_colors[node_id] = "black"
 
         ax.set_xlim(-1.2, 1.2)
         ax.set_ylim(-1.2, 1.2)
@@ -206,12 +238,20 @@ class ChordNetwork:
 
         pos = nx.circular_layout(G)
         self.node_positions = pos
-        nx.draw(G, pos, with_labels=True, labels=labels, node_size=800, node_color="lightblue", edge_color="gray",
+
+        # Draw nodes and edges
+        nx.draw(G, pos, with_labels=False, node_size=800, node_color=node_colors, edge_color="gray",
                 font_size=6, arrowsize=10, ax=ax)
 
+        # Draw labels with specific text colors
+        for node, (x, y) in pos.items():
+            ax.text(x, y, labels[node], fontsize=6, color=text_colors[node],
+                    ha='center', va='center', bbox=dict(facecolor='none', edgecolor='none', pad=0))
+
+        # Show key counts
         for node, (x, y) in pos.items():
             key_count = len(getattr(self.nodes[node], 'data', []))
-            ax.text(x + 0.12, y + 0.15, str(key_count), fontsize=7, fontweight='bold', color='white',
+            ax.text(x + 0.12, y + 0.15, str(key_count), fontsize=6, color='white',
                     ha='center', va='center', bbox=dict(facecolor='black', edgecolor='black',
                                                         boxstyle='round,pad=0.5', alpha=0.75))
 
@@ -272,29 +312,37 @@ class ChordNetwork:
             log(PREFIX, "All nodes have departed. Exiting...")
             os._exit(0)
 
-import sys
 
 if __name__ == "__main__":
     mode = "--gui"
-    num_nodes = 0
 
-    if len(sys.argv) > 1:
-        mode = sys.argv[1].lower()
+    parser = argparse.ArgumentParser(description="Start a Chord Network")
+    parser.add_argument("-m", "--mode", choices=["cli", "gui"], required=True, help="Mode to run the Chord network")
+    parser.add_argument("-n", "--num_nodes", type=int, default=0, help="Number of startup nodes (default: 0)")
+    parser.add_argument("-r", "--replication_factor", type=int, default=REPLICATION_FACTOR, help=f"Replication factor (default: {REPLICATION_FACTOR})")
+    parser.add_argument("-c", "--consistency", choices=["chain", "eventual"], default="chain", help="Consistency model (default: chain)")
+    parser.add_argument("-i", "--bootstrap_ip", type=str, default=BOOTSTRAP_IP, help=f"Bootstrap node IP address (default: {BOOTSTRAP_IP})")
+    parser.add_argument("-p", "--bootstrap_port", type=int, default=BOOTSTRAP_PORT, help=f"Bootstrap node port (default: {BOOTSTRAP_PORT})")
+    args = parser.parse_args()
 
-    if len(sys.argv) > 2:
-        try:
-            num_nodes = int(sys.argv[2])
-        except ValueError:
-            print("Invalid number of nodes! Using default (0).")
-
-    if mode == "--cli":
+    if args.mode == "cli":
         log(PREFIX, "Starting Chord Network in CLI mode...")
-        network = ChordNetwork(BOOTSTRAP_IP, BOOTSTRAP_PORT, startup_nodes=num_nodes, gui=None)
+        network = ChordNetwork(bootstrap_ip=args.bootstrap_ip,
+                               bootstrap_port=args.bootstrap_port,
+                               startup_nodes=args.num_nodes - 1,
+                               replication_factor=args.replication_factor,
+                               consistency=args.consistency,
+                               gui=None)
         network.cli()
-    elif mode == "--gui":
+    elif args.mode == "gui":
         log(PREFIX, "Starting Chord Network in GUI mode...")
         root = tk.Tk()
-        app = ChordGUI(root, startup_nodes=num_nodes)
+        app = ChordGUI(root=root,
+                       bootstrap_ip=args.bootstrap_ip,
+                       bootstrap_port=args.bootstrap_port,
+                       startup_nodes=args.num_nodes - 1,
+                       replication_factor=args.replication_factor,
+                       consistency=args.consistency)
 
         # handle Control-C taps and gracefully exit in a fast manner
         exit_requested = False
