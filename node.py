@@ -1,6 +1,7 @@
 import socket
 import threading
 import time
+import json
 
 from utils import hash_key, log, custom_split
 
@@ -155,9 +156,18 @@ class Node:
             # self.log(f"Forwarding key {key} to successor {str(self.successor.node_id)[-4:]}")
             return self.forward_request("insert", key, value)
 
-    def query(self, key, hops=0):
+    def query(self, key, hops=0, initial_node=None):
         """Handles queries based on consistency model."""
         hashed_key = hash_key(key)
+
+        if key == "*":
+            if initial_node is None:
+                initial_node=self.node_id
+            elif initial_node == self.successor.node_id:
+                return f"{self.prefix}\n{json.dumps(self.data, indent=4)}"
+            
+            return self.forward_request("query", key, initial_node)
+            #return json.dumps(self.data, indent=4)
 
         if self.consistency == "chain":
             if self.responsible_for(hashed_key) or hops > 0:
