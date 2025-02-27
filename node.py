@@ -98,11 +98,14 @@ class Node:
                     response = self.insert(key, value, replica_count) or "ERROR: Insert failed"
             elif command == "query":
                 key = parts[1]
-                if len(parts) == 3:
-                    hops = int(parts[2])
-                else:
-                    hops = 0
-                response = f"{self.query(key, hops=hops)}"
+                results = {}
+                hops = 0
+                if key == "*" and len(parts) == 3:
+                    results = json.loads(parts[2])
+                    #response = json.dumps(parts[2])
+                elif len(parts) == 3:
+                    hops = int(parts[2])    
+                response = f"{self.query(key, hops=hops, results=results)}"
             elif command == "delete":
                 key = parts[1]
                 if len(parts) == 3:
@@ -156,11 +159,20 @@ class Node:
             # self.log(f"Forwarding key {key} to successor {str(self.successor.node_id)[-4:]}")
             return self.forward_request("insert", key, value)
 
-    def query(self, key, hops=0, initial_node=None):
+    def query(self, key, hops=0, results=None):
         """Handles queries based on consistency model."""
         hashed_key = hash_key(key)
 
         if key == "*":
+
+            if results is None:
+                results = {}
+            results[self.node_id] = self.data
+            if self.successor.node_id in results.keys():
+                self.log(f"CIRCLE COMPLETED")
+                return json.dumps(results, indent=4)
+            return self.forward_request("query", key, results=json.dumps(results))
+            '''
             if initial_node is None:
                 initial_node=self.node_id
             elif initial_node == self.successor.node_id:
@@ -168,8 +180,9 @@ class Node:
             
             return self.forward_request("query", key, initial_node)
             #return json.dumps(self.data, indent=4)
+            '''
 
-        if self.consistency == "chain":
+        elif self.consistency == "chain":
             if self.responsible_for(hashed_key) or hops > 0:
                 if hops < self.replication_factor - 1:
                     return self.forward_request("query", key, hops=hops + 1)
@@ -224,7 +237,7 @@ class Node:
             self.log(f"Lazy forwarding to {successor.ip}:{successor.port} for key {key}")
             successor.forward_request(command, key, value, replica_count=replica_count + 1)
 
-    def forward_request(self, command, key, value=None, replica_count=0, hops=0):
+    def forward_request(self, command, key, value=None, replica_count=0, hops=0, results={}):
         """Forwards request to successor, passing the baton along."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             client.connect((self.successor.ip, self.successor.port))
@@ -233,6 +246,8 @@ class Node:
                 message += f" {replica_count}"
             if hops > 0:
                 message += f" {hops}"
+            if results != {}:
+                message += f" {json.dumps(results)}"
 
             client.sendall(message.encode())
             response = client.recv(1024).decode()
