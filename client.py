@@ -10,8 +10,17 @@ def send_command(command):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             client.connect(('127.0.0.1', 5000))
             client.sendall(command.encode())
-            response = client.recv(1024).decode()
-            print(f"Response: {response}")
+
+            response = []
+            while True:
+                # read in chunks
+                chunk = client.recv(4096).decode()
+                # stop when no more data arrives
+                if not chunk:
+                    break
+                response.append(chunk)
+            print(f"Response: {"".join(response)}")
+
     except Exception as e:
         print(f"Error: {e}")
 

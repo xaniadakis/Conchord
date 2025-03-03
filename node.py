@@ -13,11 +13,12 @@ class Node:
         self.bootstrap_node = bootstrap
         self.successor = self
         self.predecessor = self
-        self.data = {}  # Stores <key, value> pairs locally
+        self.data = {}
+
         if not self.bootstrap_node:
             self.prefix = f"[NODE {str(self.node_id)[-4:]}]: "
         else:
-            self.prefix = "[BOOTSTRAP NODE]: "
+            self.prefix = F"[BOOTSTRAP NODE | {str(self.node_id)[-4:]}]: "
         self.replication_factor = replication_factor  # k replicas
         self.consistency = consistency
 
@@ -98,11 +99,12 @@ class Node:
                     response = self.insert(key, value, replica_count) or "ERROR: Insert failed"
             elif command == "query":
                 key = parts[1]
-                if len(parts) == 3:
+                initial_node, hops = None, 0
+                if len(parts) == 4:
+                    initial_node = parts[3]
+                elif len(parts) == 3:
                     hops = int(parts[2])
-                else:
-                    hops = 0
-                response = f"{self.query(key, hops=hops)}"
+                response = f"{self.query(key, hops=hops, initial_node=initial_node)}"
             elif command == "delete":
                 key = parts[1]
                 if len(parts) == 3:
@@ -161,13 +163,42 @@ class Node:
         hashed_key = hash_key(key)
 
         if key == "*":
+            # the bootstrap node
             if initial_node is None:
-                initial_node=self.node_id
-            elif initial_node == self.successor.node_id:
-                return f"{self.prefix}\n{json.dumps(self.data, indent=4)}"
-            
-            return self.forward_request("query", key, initial_node)
-            #return json.dumps(self.data, indent=4)
+                self.log(f"First query * call")
+                initial_node = self.node_id
+
+            # the last node before bootstrap returns its data
+            if self.successor.node_id == int(initial_node):
+                self.log(f"Last query * call, added {len(self.data)}")
+                response = json.dumps(self.data, indent=4)
+                return response
+
+            # forward request to the successor, waiting for their response
+            response = self.forward_request("query", key, initial_node=initial_node)
+
+            # parse response safely
+            if not response.strip():
+                self.log("ERROR: Empty response received!")
+                return json.dumps(self.data, indent=4)
+
+            # convert response to dict
+            try:
+                received_data = json.loads(response)
+            except json.JSONDecodeError as e:
+                self.log(f"ERROR: JSON decode failed: {e}, response: {response}")
+                # if failed return my data
+                return json.dumps(self.data, indent=4)
+
+            before = len(received_data)
+
+            # extend dict with current node's data
+            received_data.update(self.data)
+
+            after = len(received_data)
+            self.log(f"Added: {after - before} pairs, now hold: {after}")
+            return json.dumps(received_data, indent=4)
+
 
         if self.consistency == "chain":
             if self.responsible_for(hashed_key) or hops > 0:
@@ -224,18 +255,35 @@ class Node:
             self.log(f"Lazy forwarding to {successor.ip}:{successor.port} for key {key}")
             successor.forward_request(command, key, value, replica_count=replica_count + 1)
 
-    def forward_request(self, command, key, value=None, replica_count=0, hops=0):
+    def forward_request(self, command, key, value=None, replica_count=0, hops=0, initial_node=None):
         """Forwards request to successor, passing the baton along."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+            client.settimeout(2)  # Prevent infinite waiting
             client.connect((self.successor.ip, self.successor.port))
             message = f"{command} {key}" if value is None else f"{command} {key} {value}"
             if replica_count > 0:
                 message += f" {replica_count}"
             if hops > 0:
                 message += f" {hops}"
+            if initial_node is not None:
+                message += f" 0 {initial_node}"
 
             client.sendall(message.encode())
-            response = client.recv(1024).decode()
+            if command != "query":
+                response = client.recv(1024).decode()
+            else:
+                # a solution to receive huge responses dynamically (like the query response)
+                response = []
+                while True:
+                    try:
+                        chunk = client.recv(1024).decode()  # read chunks
+                        if not chunk:
+                            break  # stop when no more data arrives
+                        response.append(chunk)
+                    except socket.timeout:
+                        break  # stop if no data arrives within timeout
+
+                response = "".join(response)
             return response
 
     def responsible_for(self, key_hash):
