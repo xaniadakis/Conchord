@@ -29,7 +29,7 @@ class Node:
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-        self.server_socket.bind((self.ip, self.port))
+        self.server_socket.bind(("0.0.0.0", self.port))
         self.server_socket.listen(5)
         self.log(f"Listening on {self.ip}:{self.port}")
 
@@ -198,7 +198,6 @@ class Node:
             after = len(received_data)
             self.log(f"Added: {after - before} pairs, now hold: {after}")
             return json.dumps(received_data, indent=4)
-
 
         if self.consistency == "chain":
             if self.responsible_for(hashed_key) or hops > 0:

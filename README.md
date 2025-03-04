@@ -29,6 +29,10 @@ Example:
 ```sh
 python3 chord_network.py --mode gui -i 127.0.0.1 -p 5000 -n 5 -r 2 -c eventual
 ```
+or:
+```sh
+python3 chord_network.py --mode cli -i 10.0.9.91 -p 5000 -r 2 -c eventual
+```
 
 ### Features
 - **Join Node**: Automatically assigns a port.

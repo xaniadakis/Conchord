@@ -179,9 +179,9 @@ class ChordNetwork:
         """Returns a list of existing node IDs."""
         return sorted(list(self.nodes.keys()))
 
-    def join_node(self, ip, port, replication_factor, consistency, silent=False):
+    def join_node(self, ip, port, silent=False):
         """ Joins a new node and updates the network """
-        new_node = Node(ip=ip, port=port, replication_factor=replication_factor, consistency=consistency)
+        new_node = Node(ip=ip, port=port, replication_factor=self.replication_factor, consistency=self.consistency)
         threading.Thread(target=new_node.start_server).start()
         new_node.join(self.bootstrap_node.ip, self.bootstrap_node.port)
         self.nodes[new_node.node_id] = new_node
