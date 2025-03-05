@@ -41,6 +41,7 @@ class Node:
 
             request = client.recv(1024).decode().strip()
             parts = custom_split(request)
+            self.log(f"Received request: {len(parts)}")
             command = parts[0].lower()
 
             if command == "find_successor":
@@ -100,12 +101,14 @@ class Node:
                 key = parts[1]
                 results = {}
                 hops = 0
-                if key == "*" and len(parts) == 3:
+                if key == "*" and len(parts) > 3:
+                    self.log(f"Querying all nodes with {parts[2]}")
                     results = json.loads(parts[2])
                     #response = json.dumps(parts[2])
                 elif len(parts) == 3:
                     hops = int(parts[2])    
-                response = f"{self.query(key, hops=hops, results=results)}"
+                self.log(f"Querying with {results.keys() if results else 'empty results'}")
+                response = f"{self.query(key, hops=hops, results=json.dumps(results))}"
             elif command == "delete":
                 key = parts[1]
                 if len(parts) == 3:
@@ -159,18 +162,16 @@ class Node:
             # self.log(f"Forwarding key {key} to successor {str(self.successor.node_id)[-4:]}")
             return self.forward_request("insert", key, value)
 
-    def query(self, key, hops=0, results=None):
+    def query(self, key, hops=0, results={}):
         """Handles queries based on consistency model."""
         hashed_key = hash_key(key)
 
         if key == "*":
-
-            if results is None:
-                results = {}
+            results = json.loads(results)
             results[self.node_id] = self.data
             if self.successor.node_id in results.keys():
                 self.log(f"CIRCLE COMPLETED")
-                return json.dumps(results, indent=4)
+                return json.dumps(results)
             return self.forward_request("query", key, results=json.dumps(results))
             '''
             if initial_node is None:
@@ -246,8 +247,8 @@ class Node:
                 message += f" {replica_count}"
             if hops > 0:
                 message += f" {hops}"
-            if results != {}:
-                message += f" {json.dumps(results)}"
+            if key == "*":
+                message += f' {json.dumps(results).strip()}'
 
             client.sendall(message.encode())
             response = client.recv(1024).decode()
