@@ -167,8 +167,6 @@ class ChordNetwork:
         for _ in range(num_nodes):
             self.join_node(ip=self.bootstrap_ip,
                            port=self.next_port,
-                           replication_factor=self.replication_factor,
-                           consistency=self.consistency,
                            silent=True)
             self.next_port += 1
             time.sleep(0.3)
