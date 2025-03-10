@@ -8,6 +8,17 @@ import json
 
 # ---- PAGE CONFIG ----
 st.set_page_config(page_title="ConChord", page_icon="🎼", layout="wide")
+# ---- GLOBAL CSS FOR FULL-WIDTH BUTTONS ----
+st.markdown(
+    """
+    <style>
+        div.stButton > button {
+            width: 100% !important;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 # ---- SESSION STATE INITIALIZATION ----
 if "action" not in st.session_state:
@@ -87,79 +98,66 @@ def visualize_chord_ring():
     fig, ax = plt.subplots(figsize=(7, 5))
     G = nx.DiGraph()
     labels = {}
-    node_colors = []
+    node_colors = {}
     text_colors = {}
 
     # Ensure node IDs are always strings
     nodes = {str(node_id): details for node_id, details in nodes.items()}
 
-    # Store node positions for later use in button mapping
-    node_positions = {}
-
     # Explicitly add all nodes first
     for node_id, details in nodes.items():
-        node_id = str(node_id)  # Convert to string
         G.add_node(node_id)
         labels[node_id] = f"{node_id[-4:]} | {str(details.get('port', '??'))[-2:]}"  # Short ID | Port
 
         # Assign colors
         if details.get("is_bootstrap", False):
-            node_colors.append("#BE3144")  # Bootstrap node (Red)
+            node_colors[node_id] = "#BE3144"  # Bootstrap node (Red)
             text_colors[node_id] = "white"
         else:
-            node_colors.append("lightblue")  # Normal nodes (Blue)
+            node_colors[node_id] = "lightblue"  # Normal nodes (Blue)
             text_colors[node_id] = "black"
 
     # Add edges
     for node_id, details in nodes.items():
-        node_id = str(node_id)
-        successor = details.get("successor")
+        successor = str(details.get("successor"))
+        if successor in nodes:
+            G.add_edge(node_id, successor)
+        else:
+            st.warning(f"Node {node_id} has an unknown successor {successor}, skipping edge.")
 
-        if successor is not None:
-            successor = str(successor)  # Convert to string
-            if successor in nodes:
-                G.add_edge(node_id, successor)
+    # **Handle layout for 2 nodes** (avoids overlapping in `nx.circular_layout`)
+    if len(G.nodes) == 2:
+        pos = {
+            list(G.nodes)[0]: (-1, 0),
+            list(G.nodes)[1]: (1, 0)
+        }
+        show_key_counts = False  # Don't show key counts for 2 nodes
+    else:
+        pos = nx.circular_layout(G)
+        show_key_counts = True  # Show key counts normally
 
-    # Generate positions AFTER all nodes are added
-    pos = nx.circular_layout(G)
-
-    # Store positions for node click interaction
-    node_positions = {node: pos[node] for node in G.nodes}
+    print("Nodes:", nodes)
+    print("Edges:", list(G.edges))
 
     # Draw nodes and edges
-    nx.draw(G, pos, with_labels=False, node_size=800, node_color=node_colors, edge_color="gray",
-            font_size=6, arrowsize=10, ax=ax)
+    nx.draw(G, pos, with_labels=False, node_size=800, node_color=[node_colors[n] for n in G.nodes],
+            edge_color="gray", font_size=6, arrowsize=10, ax=ax)
 
     # Draw labels with specific text colors
     for node, (x, y) in pos.items():
-        color = text_colors.get(node, "black")
-        ax.text(x, y, labels.get(node, ""), fontsize=6, color=color,
+        ax.text(x, y, labels[node], fontsize=6, color=text_colors[node],
                 ha='center', va='center', bbox=dict(facecolor='none', edgecolor='none', pad=0))
 
-    # Show key counts above nodes
-    for node, (x, y) in pos.items():
-        key_count = nodes.get(node, {}).get("key_count", 0)
-        ax.text(x, y + 0.1, str(key_count), fontsize=6, color='white',
-                ha='center', va='center', bbox=dict(facecolor='black', edgecolor='black',
-                                                    boxstyle='round,pad=0.5', alpha=0.75))
-
-    # Store node positions for interaction
-    st.session_state["node_positions"] = node_positions
+    # Show key counts **ONLY if more than 2 nodes**
+    if show_key_counts:
+        for node, (x, y) in pos.items():
+            key_count = nodes[node].get("key_count", 0)
+            ax.text(x, y + 0.1, str(key_count), fontsize=6, color='white',
+                    ha='center', va='center', bbox=dict(facecolor='black', edgecolor='black',
+                                                        boxstyle='round,pad=0.5', alpha=0.75))
 
     st.pyplot(fig)
 
-# ---- DISPLAY SELECTED NODE KEYS ----
-def display_selected_node_keys():
-    """Display keys of the selected node when clicked."""
-    if "selected_node" in st.session_state and st.session_state["selected_node"]:
-        selected_node = st.session_state["selected_node"]
-        stored_keys = st.session_state.get("selected_keys", [])
-
-        st.markdown(f"### Stored Keys in Node {selected_node[-4:]}")
-        if stored_keys:
-            st.text_area("Stored Keys", "\n".join(map(str, stored_keys)), height=200)
-        else:
-            st.info("No keys stored in this node.")
 # ---- SIDEBAR NAVIGATION ----
 with st.sidebar:
     selected = option_menu(
@@ -201,37 +199,91 @@ if selected == "Operations":
             if key_input.strip() and value_input.strip():
                 command = f'insert "{key_input}" {value_input}'
                 response = send_command(command)
-                st.success(f"Response: {response}")
+                st.markdown(
+                    f"""
+                    <div style='display: flex; justify-content: center;'>
+                        <div style='width:20%; padding:10px; margin-bottom:15px; border-radius:5px; background-color:#d4edda; 
+                                    color:#155724; font-weight:bold; font-size:17px; text-align: center;'>
+                            {response}
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
             else:
                 st.error("Please enter both a key and a value.")
 
     # ---- QUERY ACTION ----
     elif st.session_state["action"] == "query":
         st.markdown("<h3>Query Data</h3>", unsafe_allow_html=True)
-
         query_input = st.text_input("Enter Key to Query:", key="query_key")
 
         if st.button("Submit Query"):
             if query_input.strip():
                 command = f'query "{query_input}"'
                 response = send_command(command)
-                st.success(f"Response: {response}")
+
+                st.markdown(
+                    f"""
+                    <div style='display: flex; justify-content: center;'>
+                        <div style='width:20%; padding:10px; margin-bottom:15px; border-radius:5px; background-color:#d4edda; 
+                                    color:#155724; font-weight:bold; font-size:17px; text-align: center;'>
+                            {response}
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
             else:
                 st.error("Please enter a key.")
+
+        if st.button('Query ☆'):
+            command = 'query ☆'
+            response = send_command(command)
+
+            if not response.strip():
+                st.warning("Empty response from network.")
+            else:
+                try:
+                    data = json.loads(response)
+                    if not data:
+                        st.info("No stored data found.")
+                    else:
+                        formatted_data = [{"Key": k, "Value": v} for k, v in data.items()]
+                        st.table(formatted_data)  # Display as a structured table
+                        # Use st.dataframe for full-width display
+                        # st.dataframe(formatted_data, use_container_width=True)
+                except json.JSONDecodeError:
+                    st.error("Invalid JSON format in response.")
 
     # ---- DELETE ACTION ----
     elif st.session_state["action"] == "delete":
         st.markdown("<h3>Delete Data</h3>", unsafe_allow_html=True)
 
-        delete_input = st.text_input("Enter Key to Delete:", key="delete_key")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            delete_input = st.text_input("Enter Key to Delete:", key="delete_key")
 
-        if st.button("Submit Delete"):
-            if delete_input.strip():
-                command = f'delete "{delete_input}"'
-                response = send_command(command)
-                st.success(f"Response: {response}")
-            else:
-                st.error("Please enter a key.")
+        with col2:
+            st.markdown(
+                """
+                <style>
+                div.stButton > button {
+                    height: 36px !important; /* Match text_input height */
+                    margin-top: 12.5px !important; /* Move button slightly down */
+                    width: 100%;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+            if st.button("Submit Delete"):
+                if delete_input.strip():
+                    command = f'delete "{delete_input}"'
+                    response = send_command(command)
+                    st.success(f"Response: {response}")
+                else:
+                    st.error("Please enter a key.")
 
     # ---- HELP ACTION ----
     elif st.session_state["action"] == "help":

@@ -291,7 +291,7 @@ class Node:
     def query(self, key, hops=0, initial_node=None):
         """Handles queries based on consistency model."""
         hashed_key = hash_key(key)
-
+        print(f"query key: '{key}'")
         if key == "*":
             # the bootstrap node
             if initial_node is None:
@@ -333,7 +333,6 @@ class Node:
             if self.responsible_for(hashed_key) or hops > 0:
                 if hops < self.replication_factor - 1:
                     return self.forward_request("query", key, hops=hops + 1)
-                self.log(f"found {key}")
                 return self.data.get(key, "Key not found")
             else:
                 return self.forward_request("query", key)
