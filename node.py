@@ -291,7 +291,6 @@ class Node:
     def query(self, key, hops=0, initial_node=None):
         """Handles queries based on consistency model."""
         hashed_key = hash_key(key)
-        print(f"query key: '{key}'")
         if key == "*":
             # the bootstrap node
             if initial_node is None:
