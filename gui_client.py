@@ -31,13 +31,35 @@ if "query_key" not in st.session_state:
     st.session_state["query_key"] = ""
 if "delete_key" not in st.session_state:
     st.session_state["delete_key"] = ""
+import subprocess
+
+
+def ssh_run_node(vm_number, ip, port, bootstrap_ip, bootstrap_port):
+    """SSH into the selected VM using the alias and run the node.py script."""
+    vm_alias = f"team_2-vm{vm_number}"  # Use the configured alias
+
+    # command = f"ssh {vm_alias} 'python3 ~/conchord/node.py --ip {ip} --port {port} --bootstrap_ip {bootstrap_ip} --bootstrap_port {bootstrap_port}'"
+    command = f"ssh {vm_alias} 'python3 ~/conchord/node.py --ip {ip} --port {port} --bootstrap_ip 10.0.9.91 --bootstrap_port 5000'"
+
+    try:
+        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+
+        if result.returncode == 0:
+            print(f"OK: {result.stdout}")
+            return f"Success: {result.stdout}"
+        else:
+            print(f"ERR: {result.stderr}")
+            return f"Error: {result.stderr}"
+
+    except Exception as e:
+        return f"SSH Connection Error: {e}"
 
 # ---- FUNCTION: SEND COMMAND TO CHORD NETWORK ----
 def send_command(command):
     """Send a command to the bootstrap node and return the response."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-            client.connect(('127.0.0.1', 5000))  # Connect to bootstrap node
+            client.connect(('3.67.245.126', 5000))  # Connect to bootstrap node
             client.sendall(command.encode())
 
             response = []
@@ -297,32 +319,92 @@ if selected == "Operations":
 # ---- OVERLAY PAGE ----
 elif selected == "Overlay":
     st.markdown("<h2 style='text-align: center;'>Overlay</h2>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 4, 1])  # Make the center column take more space
+
+    col1, col2, col3 = st.columns([1, 4, 1])  # Center column takes more space
 
     with col2:
-        col21, col22, col23 = st.columns([4, 1, 4])  # Make the center column take more space
-        with col22:
+        # REFRESH BUTTON
+        col24, col25, col26 = st.columns([4, 1, 4])
+        with col25:
             if st.button("Refresh"):
                 st.rerun()
-        visualize_chord_ring()  # This ensures it's constrained in the middle
 
-        # User selects a node to fetch its data
+        visualize_chord_ring()  # Display the network graph
+
+        st.markdown("### Join the Network")
+
+        col27, col28, col29, col299 = st.columns([4, 2, 2, 2])
+        # JOIN SECTION
+        with col27:
+            join_ip = st.text_input("Enter IP Address:", key="join_ip")
+        with col28:
+            join_port = st.text_input("Enter Port:", key="join_port")
+        with col29:
+            join_vm = st.text_input("Enter VM Number:", key="join_vm")
+        with col299:
+            st.markdown(
+                """
+                <style>
+                div.stButton > button {
+                    height: 36px !important; /* Match text_input height */
+                    margin-top: 12.5px !important; /* Move button slightly down */
+                    width: 100%;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+            if st.button("Join"):
+                if join_ip.strip() and join_port.strip() and join_vm.strip():
+                    response = ssh_run_node(join_vm, join_ip, join_port, "127.0.0.1",
+                                            "5000")  # Bootstrap IP and Port are fixed
+                    st.success(f"Response: {response}")
+                else:
+                    st.error("Please enter IP address, Port, and VM Number.")
+
+        # DEPART SECTION
+        st.markdown("### Depart the Network")
+        col210, col211 = st.columns([4, 1])
+        with col210:
+            depart_node_id = st.text_input("Enter Node ID to Depart:", key="depart_node_id")
+
+        with col211:
+            st.markdown(
+                """
+                <style>
+                div.stButton > button {
+                    height: 36px !important; /* Match text_input height */
+                    margin-top: 12.5px !important; /* Move button slightly down */
+                    width: 100%;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+            if st.button("Depart"):
+                if depart_node_id.strip():
+                    command = f'depart {depart_node_id}'
+                    response = send_command(command)
+                    st.warning(f"Response: {response}")
+                else:
+                    st.error("Please enter a valid Node ID.")
+
+        # Fetch Data from a Node
         st.markdown("### Fetch Data from a Node")
-        selected_node = st.text_input("Enter Node ID to Fetch Data:")
+        selected_node = st.text_input("Enter Node ID to Fetch Data:", key="fetch_node_id")
 
         if st.button("Fetch Node Data"):
             if selected_node.strip():
                 node_data = fetch_data_from_node(selected_node)
 
                 if "error" in node_data:
-                    st.error(node_data["error"])  # Show error if retrieval failed
+                    st.error(node_data["error"])
                 else:
-                    if not node_data.get("data"):  # If the node has no data
+                    if not node_data.get("data"):
                         st.info("This node has no stored data.")
                     else:
-                        # Convert data dictionary to a table
                         formatted_data = [{"Key": k, "Value": v} for k, v in node_data["data"].items()]
-                        st.table(formatted_data)  # Display as a structured table
+                        st.table(formatted_data)
             else:
                 st.warning("Please enter a valid Node ID.")
 

@@ -123,7 +123,7 @@ class Node:
 
         # If request returns to the initial node, return full collected data
         if self.successor.node_id == int(initial_node):
-            self.log(f"Final overlay call, returning {len(overlay_data)} entries")
+            self.log(f"Final overlay call, returning data.")
             return json.dumps({self.node_id: overlay_data}, indent=4)
 
         # Forward request to successor and collect response
@@ -145,12 +145,10 @@ class Node:
         received_overlay[self.node_id] = overlay_data
 
         self.log(f"Overlay aggregation: now holding {len(received_overlay)} nodes")
-
         return json.dumps(received_overlay, indent=4)
 
     def handle_request(self, client):
         try:
-
             request = client.recv(1024).decode().strip()
             parts = custom_split(request)
             command = parts[0].lower()
