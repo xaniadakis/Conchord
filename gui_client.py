@@ -5,6 +5,9 @@ import socket
 import matplotlib.pyplot as plt
 import networkx as nx
 import json
+from tqdm import tqdm  # You may need to install this with pip if not installed
+import os
+import time
 
 # ---- PAGE CONFIG ----
 st.set_page_config(page_title="ConChord", page_icon="🎼", layout="wide")
@@ -59,7 +62,7 @@ def send_command(command):
     """Send a command to the bootstrap node and return the response."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-            client.connect(('3.67.245.126', 5000))  # Connect to bootstrap node
+            client.connect(('127.0.0.1', 5000))  # Connect to bootstrap node
             client.sendall(command.encode())
 
             response = []
@@ -180,6 +183,46 @@ def visualize_chord_ring():
 
     st.pyplot(fig)
 
+
+def process_insert_directory(directory):
+    """Process a directory containing insert files after fetching network configuration."""
+    if not os.path.exists(directory) or not os.path.isdir(directory):
+        return False, 0, None  # Return failure, 0 time, and no config
+
+    # Fetch network configuration
+    config_response = send_command("get_network_config").strip()
+
+    if ":" in config_response:
+        replication_factor, consistency = config_response.split(":")
+        network_config = f"Replication Factor: {replication_factor}, Consistency: {consistency}"
+    else:
+        network_config = "Failed to fetch network configuration"
+
+    insert_files = sorted(f for f in os.listdir(directory) if f.startswith("insert_") and f.endswith(".txt"))
+
+    total_files = len(insert_files)
+    if total_files == 0:
+        return False, 0, network_config  # No files found
+
+    start_time = time.time()
+
+    for filename in tqdm(insert_files, desc="Processing Files", unit="file", ncols=80):
+        filepath = os.path.join(directory, filename)
+        try:
+            with open(filepath, 'r', encoding='utf-8') as file:
+                value = filename.split('_')[1]  # Extract number part
+                keys = [line.strip() for line in file if line.strip()]
+
+                for key in tqdm(keys, desc=f"  Inserting keys from {filename}", unit="key", leave=False, ncols=80):
+                    command = f"insert \"{key}\" {value}"
+                    response = send_command(command)
+
+        except Exception:
+            return False, 0, network_config  # Error during processing
+
+    elapsed_time = time.time() - start_time
+    return True, elapsed_time, network_config
+
 # ---- SIDEBAR NAVIGATION ----
 with st.sidebar:
     selected = option_menu(
@@ -195,7 +238,7 @@ if selected == "Operations":
     st.markdown("<h2 style='text-align: center;'>Operations</h2>", unsafe_allow_html=True)
 
     st.subheader("Choose an action:")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
         if st.button("Insert"):
@@ -209,6 +252,9 @@ if selected == "Operations":
     with col4:
         if st.button("Help"):
             st.session_state["action"] = "help"
+    with col5:
+        if st.button("Batch Insert"):
+            st.session_state["action"] = "batch_insert"
 
     # ---- INSERT ACTION ----
     if st.session_state["action"] == "insert":
@@ -315,6 +361,40 @@ if selected == "Operations":
         st.write("- **query** `<key>` - Retrieve a value by key.")
         st.write("- **delete** `<key>` - Remove a key-value pair.")
         st.write("- **help** - Show available commands.")
+
+    # ---- BATCH INSERT ACTION ----
+    if st.session_state.get("action") == "batch_insert":
+        st.markdown("<h3>Batch Insert</h3>", unsafe_allow_html=True)
+
+        directory = "insert"
+        success, elapsed_time, network_config = process_insert_directory(directory)  # Capture time & config
+
+        if success:
+            st.markdown(
+                f"""
+                <div style='display: flex; justify-content: center;'>
+                    <div style='width:60%; padding:10px; margin-bottom:15px; border-radius:5px; background-color:#d4edda; 
+                                color:#155724; font-weight:bold; font-size:17px; text-align: center;'>
+                        Success: Batch insert processing completed in {elapsed_time:.2f} seconds.<br>
+                        <strong>Network Configuration:</strong> {network_config}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                f"""
+                <div style='display: flex; justify-content: center;'>
+                    <div style='width:60%; padding:10px; margin-bottom:15px; border-radius:5px; background-color:#f8d7da; 
+                                color:#721c24; font-weight:bold; font-size:17px; text-align: center;'>
+                        Failure: Batch insert encountered errors.<br>
+                        <strong>Network Configuration:</strong> {network_config}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
 # ---- OVERLAY PAGE ----
 elif selected == "Overlay":

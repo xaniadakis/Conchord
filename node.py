@@ -42,10 +42,10 @@ class Node:
     def start_server(self):
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-        self.server_socket.bind(("0.0.0.0", self.port))
+        bind_ip = "0.0.0.0"
+        self.server_socket.bind((bind_ip, self.port))
         self.server_socket.listen(5)
-        self.log(f"Listening on {self.ip}:{self.port}")
+        self.log(f"Binding on {bind_ip}:{self.port}")
 
         while True:
             client, _ = self.server_socket.accept()
@@ -544,7 +544,6 @@ if __name__ == "__main__":
                 bootstrap=args.bootstrap,
                 replication_factor=args.replication_factor,
                 consistency=args.consistency)
-
 
     # handle Control-C & gracefully depart
     def handle_exit(signum, frame):

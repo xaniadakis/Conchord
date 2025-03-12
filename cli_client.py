@@ -53,8 +53,8 @@ def fetch_nodes():
         nodes = json.loads(response)  # Parse JSON safely
         return nodes
 
-    except json.JSONDecodeError:
-        return {"error": "Invalid JSON format from server"}
+    except json.JSONDecodeError as x:
+        return {"error": f"Invalid JSON format from server {x}"}
     except Exception as e:
         return {"error": str(e)}
 
@@ -167,7 +167,12 @@ def process_insert_directory(directory):
                 # ✅ Use tqdm to show progress per file
                 for key in tqdm(keys, desc=f"  Inserting keys from {filename}", unit="key", leave=False, ncols=80):
                     command = f"insert \"{key}\" {value}"
-                    send_command(command)
+                    response = send_command(command)
+
+                    if not response or "error" in response.lower() or "400" in response or "failed" in response:
+                        print(f"\n❌ Error inserting {key}: {response}")
+                        print("Batch insert failed! Exiting...")
+                        os._exit(1)
 
         except Exception as e:
             print(f"Error processing {filename}: {e}")
