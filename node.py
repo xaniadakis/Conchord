@@ -147,13 +147,67 @@ class Node:
         self.log(f"Overlay aggregation: now holding {len(received_overlay)} nodes")
         return json.dumps(received_overlay, indent=4)
 
+    def reset_configuration(self, replication_factor, consistency, initial_node=None):
+        """
+        Propagates the reset request across the network, updating replication factor, consistency type,
+        and clearing data from all nodes.
+        """
+        if initial_node is None:
+            self.log("Initiating reset configuration process.")
+            initial_node = self.node_id  # Bootstrap starts the process
+
+        # Apply new configuration to the current node
+        self.replication_factor = int(replication_factor)
+        self.consistency = consistency
+        self.data.clear()  # Clear stored data
+        self.log(
+            f"Reset configuration: Replication Factor={self.replication_factor}, Consistency={self.consistency}, Data Cleared.")
+
+        # If this node's successor is the initial node, stop propagation
+        if self.successor.node_id == int(initial_node):
+            self.log("Final reset_config call, stopping propagation.")
+            return json.dumps({str(self.node_id)[-4:]: "ACK"}, indent=4)
+
+        # Forward request to successor and collect response
+        response = self.forward_request("reset_config", str(replication_factor), consistency, initial_node=initial_node)
+
+        # If response is empty, return only this node's data
+        if not response.strip():
+            self.log(f"{Fore.RED}ERROR: Empty reset response received!{Style.RESET_ALL}")
+            return json.dumps({str(self.node_id)[-4:]: "ACK"}, indent=4)
+
+        # Convert response to dictionary
+        try:
+            received_reset_status = json.loads(response)
+        except json.JSONDecodeError as e:
+            self.log(f"{Fore.RED}ERROR: JSON decode failed: {e}, response: {response}{Style.RESET_ALL}")
+            return json.dumps({str(self.node_id)[-4:]: "ACK"}, indent=4)  # Return only self-data if parsing fails
+
+        # Merge received data with current node
+        received_reset_status[str(self.node_id)[-4:]] = "ACK"
+
+        self.log(f"Reset aggregation: now holding reset status for {len(received_reset_status)} nodes")
+        return json.dumps(received_reset_status, indent=4)
+
     def handle_request(self, client):
         try:
             request = client.recv(1024).decode().strip()
             parts = custom_split(request)
             command = parts[0].lower()
 
-            if command == "get_network_config":
+            if command == "reset_config":
+                new_replication_factor = parts[1]
+                new_consistency = parts[2]
+                if len(parts) == 3:
+                    initial_node = None
+                elif len(parts) == 4:
+                    initial_node = parts[3]
+                else:
+                    response = json.dumps({"error": "Invalid reset_config command format"})
+                self.log(
+                    f"Resetting network config to Replication Factor={new_replication_factor}, Consistency={new_consistency}")
+                response = self.reset_configuration(new_replication_factor, new_consistency, initial_node)
+            elif command == "get_network_config":
                 self.log("Sending network config.")
                 response = f"{self.replication_factor}:{self.consistency}"
             elif command == "overlay":
@@ -380,7 +434,7 @@ class Node:
             self.log(f"Lazy forwarding to {successor.ip}:{successor.port} for key {key}")
             successor.forward_request(command, key, value, replica_count=replica_count + 1)
 
-    def forward_request(self, command, key=None, value=None, replica_count=0, hops=0, initial_node=None):
+    def forward_request(self, command, key=None, value=None, replica_count=0, hops=0, initial_node=None, replication_factor=None, consistency=None):
         """Forwards request to successor, passing the baton along."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             client.settimeout(2)  # Prevent infinite waiting
@@ -397,6 +451,8 @@ class Node:
                 message += f" {hops}"
             if initial_node is not None:
                 message += f" {initial_node}"
+            if replication_factor is not None and consistency is not None and initial_node is not None:
+                message += f" {replication_factor} {consistency} {initial_node}"
 
             client.sendall(message.encode())
 

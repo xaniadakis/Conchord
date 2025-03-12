@@ -187,7 +187,7 @@ def visualize_chord_ring():
 def process_insert_directory(directory):
     """Process a directory containing insert files after fetching network configuration."""
     if not os.path.exists(directory) or not os.path.isdir(directory):
-        return False, 0, None  # Return failure, 0 time, and no config
+        return False, 0, None, 0  # Return failure, 0 time, and no config
 
     # Fetch network configuration
     config_response = send_command("get_network_config").strip()
@@ -202,10 +202,11 @@ def process_insert_directory(directory):
 
     total_files = len(insert_files)
     if total_files == 0:
-        return False, 0, network_config  # No files found
+        return False, 0, network_config, 0  # No files found
 
     start_time = time.time()
 
+    key_counter = 0
     for filename in tqdm(insert_files, desc="Processing Files", unit="file", ncols=80):
         filepath = os.path.join(directory, filename)
         try:
@@ -214,14 +215,15 @@ def process_insert_directory(directory):
                 keys = [line.strip() for line in file if line.strip()]
 
                 for key in tqdm(keys, desc=f"  Inserting keys from {filename}", unit="key", leave=False, ncols=80):
+                    key_counter += 1
                     command = f"insert \"{key}\" {value}"
                     response = send_command(command)
 
         except Exception:
-            return False, 0, network_config  # Error during processing
+            return False, 0, network_config, 0  # Error during processing
 
     elapsed_time = time.time() - start_time
-    return True, elapsed_time, network_config
+    return True, elapsed_time, network_config, key_counter
 
 # ---- SIDEBAR NAVIGATION ----
 with st.sidebar:
@@ -238,7 +240,7 @@ if selected == "Operations":
     st.markdown("<h2 style='text-align: center;'>Operations</h2>", unsafe_allow_html=True)
 
     st.subheader("Choose an action:")
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
 
     with col1:
         if st.button("Insert"):
@@ -255,6 +257,9 @@ if selected == "Operations":
     with col5:
         if st.button("Batch Insert"):
             st.session_state["action"] = "batch_insert"
+    with col6:
+        if st.button("Reset"):
+            st.session_state["action"] = "reset_config"
 
     # ---- INSERT ACTION ----
     if st.session_state["action"] == "insert":
@@ -367,7 +372,7 @@ if selected == "Operations":
         st.markdown("<h3>Batch Insert</h3>", unsafe_allow_html=True)
 
         directory = "insert"
-        success, elapsed_time, network_config = process_insert_directory(directory)  # Capture time & config
+        success, elapsed_time, network_config, key_counter = process_insert_directory(directory)  # Capture time & config
 
         if success:
             st.markdown(
@@ -375,7 +380,7 @@ if selected == "Operations":
                 <div style='display: flex; justify-content: center;'>
                     <div style='width:60%; padding:10px; margin-bottom:15px; border-radius:5px; background-color:#d4edda; 
                                 color:#155724; font-weight:bold; font-size:17px; text-align: center;'>
-                        Success: Batch insert processing completed in {elapsed_time:.2f} seconds.<br>
+                        Success: Batch insert of {key_counter} total keys processing completed in {elapsed_time:.2f} seconds.<br>
                         <strong>Network Configuration:</strong> {network_config}
                     </div>
                 </div>
@@ -396,6 +401,37 @@ if selected == "Operations":
                 unsafe_allow_html=True
             )
 
+    # ---- RESET CONFIGURATION ACTION ----
+    if st.session_state.get("action") == "reset_config":
+        st.markdown("<h3>Reset Configuration</h3>", unsafe_allow_html=True)
+
+        col7, col8 = st.columns([3, 2])
+
+        with col7:
+            new_replication_factor = st.text_input("New Replication Factor:", key="new_replication_factor")
+
+        with col8:
+            new_consistency_type = st.selectbox("New Consistency Type:", ["chain", "eventual"], key="new_consistency_type")
+
+        if st.button("Submit Reset"):
+            if new_replication_factor.strip().isdigit():
+                command = f"reset_config {new_replication_factor} {new_consistency_type}"
+                response = send_command(command)
+
+                st.markdown(
+                    f"""
+                    <div style='display: flex; justify-content: center;'>
+                        <div style='width:60%; padding:10px; margin-bottom:15px; border-radius:5px; background-color:#d4edda; 
+                                    color:#155724; font-weight:bold; font-size:17px; text-align: center;'>
+                            Reset Successful: Replication Factor = {new_replication_factor}, Consistency = {new_consistency_type} <br>
+                            <strong>Response:</strong> {response}
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            else:
+                st.error("Please enter a valid numeric replication factor.")
 # ---- OVERLAY PAGE ----
 elif selected == "Overlay":
     st.markdown("<h2 style='text-align: center;'>Overlay</h2>", unsafe_allow_html=True)
