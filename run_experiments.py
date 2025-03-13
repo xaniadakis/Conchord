@@ -139,8 +139,6 @@ def process_request_directory(request_directory, consistency_type):
                     command = f"query \"{key}\""
                     response = send_command(command)
                     responses.append((key, response))
-                time.sleep(0.1)
-
     return True, responses, network_config
 
 def run_freshness_experiment(request_directory):
