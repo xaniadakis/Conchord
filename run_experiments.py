@@ -6,7 +6,11 @@ import pandas as pd
 from tqdm import tqdm
 from tabulate import tabulate
 import os
-
+import time
+import pandas as pd
+from tqdm import tqdm
+from tabulate import tabulate
+import os
 
 def send_command(command, host='127.0.0.1', port=5000):
     """Send a command to the bootstrap node and return the response."""
@@ -97,6 +101,70 @@ def process_query_directory(directory):
     elapsed_time = time.time() - start_time
     return True, elapsed_time, network_config, key_counter
 
+def process_request_directory(request_directory, consistency_type):
+    """Process insert and query requests from all files in a directory."""
+    if not os.path.exists(request_directory) or not os.path.isdir(request_directory):
+        return False, "Directory not found"
+
+    config_response = send_command("get_network_config").strip()
+    if ":" in config_response:
+        replication_factor, consistency = config_response.split(":")
+        network_config = f"Replication Factor: {replication_factor}, Consistency: {consistency}"
+    else:
+        network_config = "Failed to fetch network configuration"
+
+    responses = []
+    request_files = sorted(f for f in os.listdir(request_directory) if f.startswith("requests_") and f.endswith(".txt"))
+
+    for request_file in request_files:
+        file_path = os.path.join(request_directory, request_file)
+        with open(file_path, 'r', encoding='utf-8') as file:
+            for line in file:
+                parts = [p.strip() for p in line.strip().split(",")]
+                if not parts:
+                    continue
+
+                command_type = parts[0].lower()
+                if command_type == "insert" and len(parts) == 3:
+                    key, value = parts[1], parts[2]
+                    command = f"insert \"{key}\" {value}"
+                    send_command(command)  # No need to capture insert responses
+                elif command_type == "query" and len(parts) == 2:
+                    key = parts[1]
+                    command = f"query \"{key}\""
+                    response = send_command(command)
+                    responses.append((key, response))
+
+    return True, responses
+
+def run_freshness_experiment(request_directory):
+    """Run an experiment to compare freshness between linearization and eventual consistency."""
+    settings = [("3", "linearization"), ("3", "eventual")]
+    results = {}
+
+    with tqdm(total=len(settings), desc="Running Freshness Experiment", unit="config") as pbar:
+        for repl_factor, consistency in settings:
+            reset_status = reset_config(repl_factor, consistency)
+            tqdm.write(f"\nSetting Replication Factor={repl_factor}, Consistency={consistency}: {reset_status}")
+
+            success, responses = process_request_directory(request_directory, consistency)
+            if not success:
+                print(f"Failed to process requests from {request_directory}")
+                os._exit(1)
+
+            results[consistency] = responses
+            pbar.update(1)
+            tqdm.write("Let the Conchord rest for 1 second.")
+            time.sleep(1)
+
+    # Compare results
+    print("\nQuery Responses:")
+    for consistency, response_data in results.items():
+        print(f"Consistency: {consistency}")
+        for key, value in response_data:
+            print(f"Key: {key} -> Value: {value}")
+
+    input("\nPress Enter to return to the menu...")
 
 def reset_config(replication_factor, consistency_type):
     """Reset the network configuration."""
@@ -220,8 +288,14 @@ if __name__ == "__main__":
             print("Will run read throughput experiment for yall!")
             run_query_experiment(insert_directory, queries_directory)
 
+        elif choice == "3":
+            request_directory = input("Enter request directory path for freshness experiment: ")
+            print("Will run freshness experiment for yall!")
+            run_freshness_experiment(request_directory)
+
         elif choice == "3" or choice.lower() in ["exit", "quit", "q"]:
             print("Exiting...")
             break
         else:
             print("Invalid choice. Try again.")
+
