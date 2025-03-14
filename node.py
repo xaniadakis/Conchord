@@ -391,8 +391,13 @@ class Node:
             if key in self.data.keys():
                 self.log(f"found {key}")
                 return self.data[key]
+
+            # Stop forwarding after too many hops (to prevent infinite loops)
+            if hops >= self.replication_factor + 1:
+                self.log(f"Query for key '{key}' stopped: max hops reached.")
+                return "Key not found"
+
             return self.forward_request("query", key, hops=hops + 1)
-        return "Key not found"
 
     def delete(self, key, replica_count=0):
         hashed_key = hash_key(key)
