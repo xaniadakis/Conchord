@@ -1,4 +1,6 @@
+import pandas as pd
 import streamlit as st
+from numpy.f2py.auxfuncs import throw_error
 from streamlit_option_menu import option_menu
 import datetime
 import socket
@@ -8,6 +10,8 @@ import json
 from tqdm import tqdm  # You may need to install this with pip if not installed
 import os
 import time
+import matplotlib.pyplot as plt
+plt.style.use("dark_background")
 
 # ---- PAGE CONFIG ----
 st.set_page_config(page_title="ConChord", page_icon="🎼", layout="wide")
@@ -36,26 +40,67 @@ if "delete_key" not in st.session_state:
     st.session_state["delete_key"] = ""
 import subprocess
 
+import subprocess
 
-def ssh_run_node(vm_number, ip, port, bootstrap_ip, bootstrap_port):
-    """SSH into the selected VM using the alias and run the node.py script."""
-    vm_alias = f"team_2-vm{vm_number}"  # Use the configured alias
 
-    # command = f"ssh {vm_alias} 'python3 ~/conchord/node.py --ip {ip} --port {port} --bootstrap_ip {bootstrap_ip} --bootstrap_port {bootstrap_port}'"
-    command = f"ssh {vm_alias} 'python3 ~/conchord/node.py --ip {ip} --port {port} --bootstrap_ip 10.0.9.91 --bootstrap_port 5000'"
+def ssh_run_node(vm_number, ip, port, bootstrap_ip=None, bootstrap_port=5000, is_bootstrap=False):
+    """SSH into the selected VM and start a new node correctly, with verbose output."""
+
+    print(f"[INFO] Starting node: IP={ip}, Port={port}, VM={vm_number}")
+
+    if bootstrap_ip is None:
+        bootstrap_ip = ip  # If no bootstrap IP provided, assume this is the bootstrap
+        print(f"[INFO] No bootstrap IP provided. Assuming this node is the bootstrap.")
+
+    if bootstrap_port is None:
+        bootstrap_port = port  # Fix: Assigning bootstrap PORT, not IP
+        print(f"[INFO] No bootstrap port provided. Using {bootstrap_port}.")
+
+    if int(vm_number) < 0:
+        # Run locally if VM number is negative
+        print(f"[INFO] Running locally on this machine.")
+        command = (
+            f"python3 ./node.py --ip {ip} --port {port} "
+            f"--bootstrap_ip {bootstrap_ip} --bootstrap_port {bootstrap_port}"
+        )
+        if is_bootstrap:
+            command += " --bootstrap"
+    else:
+        # Run remotely using SSH
+        vm_alias = f"team_2-vm{vm_number}"  # Use the configured alias
+        print(f"[INFO] Running remotely on {vm_alias} via SSH.")
+        command = (
+            f"ssh {vm_alias} 'python3 ~/conchord/node.py --ip {ip} --port {port} "
+            f"--bootstrap_ip {bootstrap_ip} --bootstrap_port {bootstrap_port}"
+        )
+        if is_bootstrap:
+            command += " --bootstrap'"
+        else:
+            command += "'"
+
+    print(f"[DEBUG] Executing command: {command}")
 
     try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        # Use subprocess with real-time output streaming
+        with subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
+            for line in proc.stdout:
+                print(f"[STDOUT] {line.strip()}")  # Live output streaming
+            for line in proc.stderr:
+                print(f"[STDERR] {line.strip()}")  # Live error streaming
 
-        if result.returncode == 0:
-            print(f"OK: {result.stdout}")
-            return f"Success: {result.stdout}"
-        else:
-            print(f"ERR: {result.stderr}")
-            return f"Error: {result.stderr}"
+            proc.wait()  # Wait for the process to finish
+
+            if proc.returncode == 0:
+                print(f"[SUCCESS] Node started successfully on {ip}:{port}.")
+                return f"Success: Node started on {ip}:{port}"
+            else:
+                print(f"[ERROR] Node failed to start. Return code: {proc.returncode}")
+                return f"Error: Node failed to start. Return code: {proc.returncode}"
 
     except Exception as e:
+        print(f"[EXCEPTION] SSH Connection Error: {e}")
         return f"SSH Connection Error: {e}"
+
 
 # ---- FUNCTION: SEND COMMAND TO CHORD NETWORK ----
 def send_command(command):
@@ -229,11 +274,12 @@ def process_insert_directory(directory):
 with st.sidebar:
     selected = option_menu(
         menu_title="Navigation",
-        options=["Operations", "Overlay"],
-        icons=["database", "globe"],
+        options=["Operations", "Overlay", "Experiments"],
+        icons=["database", "globe", "bi-gear"],
         menu_icon="cast",
         default_index=0,
     )
+
 
 # ---- DATABASE OPERATIONS PAGE ----
 if selected == "Operations":
@@ -449,7 +495,7 @@ elif selected == "Overlay":
 
         st.markdown("### Join the Network")
 
-        col27, col28, col29, col299 = st.columns([4, 2, 2, 2])
+        col27, col28, col29, col210, col299 = st.columns([4, 2, 2, 2, 2])
         # JOIN SECTION
         with col27:
             join_ip = st.text_input("Enter IP Address:", key="join_ip")
@@ -457,6 +503,8 @@ elif selected == "Overlay":
             join_port = st.text_input("Enter Port:", key="join_port")
         with col29:
             join_vm = st.text_input("Enter VM Number:", key="join_vm")
+        with col29:
+            is_bootstrap = st.checkbox("Bootstrap", key="is_bootstrap")
         with col299:
             st.markdown(
                 """
@@ -473,7 +521,7 @@ elif selected == "Overlay":
             if st.button("Join"):
                 if join_ip.strip() and join_port.strip() and join_vm.strip():
                     response = ssh_run_node(join_vm, join_ip, join_port, "127.0.0.1",
-                                            "5000")  # Bootstrap IP and Port are fixed
+                                            "5000", is_bootstrap)  # Bootstrap IP and Port are fixed
                     st.success(f"Response: {response}")
                 else:
                     st.error("Please enter IP address, Port, and VM Number.")
@@ -523,6 +571,415 @@ elif selected == "Overlay":
                         st.table(formatted_data)
             else:
                 st.warning("Please enter a valid Node ID.")
+# ---- EXPERIMENTS ----
+if selected == "Experiments":
+    st.markdown("<h2 style='text-align: center;'>Experiments</h2>", unsafe_allow_html=True)
+
+    experiment_type = st.selectbox("Select Experiment Type", ["Write Throughput", "Read Throughput", "Freshness"])
+
+
+    def process_insert_directory(directory):
+        """Process batch insert from directory files."""
+        if not os.path.exists(directory) or not os.path.isdir(directory):
+            return False, 0, None, 0
+
+        config_response = send_command("get_network_config").strip()
+        if ":" in config_response:
+            replication_factor, consistency = config_response.split(":")
+            network_config = f"Replication Factor: {replication_factor}, Consistency: {consistency}"
+        else:
+            network_config = "Failed to fetch network configuration"
+
+        insert_files = sorted(f for f in os.listdir(directory) if f.startswith("insert_") and f.endswith(".txt"))
+        if not insert_files:
+            return False, 0, network_config, 0
+
+        start_time = time.time()
+        key_counter = 0
+
+        for filename in insert_files:
+            filepath = os.path.join(directory, filename)
+            try:
+                with open(filepath, 'r', encoding='utf-8') as file:
+                    value = filename.split('_')[1]  # Extract number part
+                    keys = [line.strip() for line in file if line.strip()]
+
+                    for key in keys:
+                        key_counter += 1
+                        command = f"insert \"{key}\" {value}"
+                        response = send_command(command)
+            except Exception:
+                return False, 0, network_config, 0
+
+        elapsed_time = time.time() - start_time
+        return True, elapsed_time, network_config, key_counter
+
+
+    def process_query_directory(directory):
+        """Process batch queries from directory files."""
+        if not os.path.exists(directory) or not os.path.isdir(directory):
+            return False, 0, None, 0
+
+        config_response = send_command("get_network_config").strip()
+        if ":" in config_response:
+            replication_factor, consistency = config_response.split(":")
+            network_config = f"Replication Factor: {replication_factor}, Consistency: {consistency}"
+        else:
+            network_config = "Failed to fetch network configuration"
+
+        query_files = sorted(f for f in os.listdir(directory) if f.startswith("query_") and f.endswith(".txt"))
+        if not query_files:
+            return False, 0, network_config, 0
+
+        start_time = time.time()
+        key_counter = 0
+
+        for filename in query_files:
+            filepath = os.path.join(directory, filename)
+            try:
+                with open(filepath, 'r', encoding='utf-8') as file:
+                    keys = [line.strip() for line in file if line.strip()]
+
+                    for key in keys:
+                        key_counter += 1
+                        command = f"query \"{key}\""
+                        response = send_command(command)
+            except Exception:
+                return False, 0, network_config, 0
+
+        elapsed_time = time.time() - start_time
+        return True, elapsed_time, network_config, key_counter
+
+
+    def process_request_directory(request_directory):
+        """Process insert and query requests from all files in a directory."""
+        if not os.path.exists(request_directory) or not os.path.isdir(request_directory):
+            return False, "Directory not found", None
+
+        config_response = send_command("get_network_config").strip()
+        replication_factor, consistency = None, None
+        if ":" in config_response:
+            replication_factor, consistency = config_response.split(":")
+            network_config = f"Replication Factor: {replication_factor}, Consistency: {consistency}"
+        else:
+            network_config = "Failed to fetch network configuration"
+
+        responses = []
+        request_files = sorted(
+            f for f in os.listdir(request_directory) if f.startswith("requests_") and f.endswith(".txt"))
+
+        for request_file in request_files:
+            file_path = os.path.join(request_directory, request_file)
+            with open(file_path, 'r', encoding='utf-8') as file:
+                for line in file:
+                    parts = [p.strip() for p in line.strip().split(",")]
+                    if not parts:
+                        continue
+
+                    command_type = parts[0].lower()
+                    if command_type == "insert" and len(parts) == 3:
+                        key, value = parts[1], parts[2]
+                        command = f"insert \"{key}\" {value}"
+                        send_command(command)
+                    elif command_type == "query" and len(parts) == 2:
+                        key = parts[1]
+                        command = f"query \"{key}\""
+                        response = send_command(command)
+                        responses.append((key, response))
+        return True, responses, network_config
+
+
+    def reset_config(replication_factor, consistency_type):
+        """Reset the network configuration."""
+        if not replication_factor.isdigit():
+            return "Error: Replication factor must be a number."
+        command = f"reset_config {replication_factor} {consistency_type}"
+        response = send_command(command)
+
+        try:
+            response_data = json.loads(response)
+            if isinstance(response_data, dict) and all(v == "ACK" for v in response_data.values()):
+                return "OK"
+        except json.JSONDecodeError:
+            return f"Error: {response}"
+
+        return f"Error: {response}"
+
+
+    if experiment_type == "Write Throughput":
+        insert_directory = st.text_input("Enter directory path for batch insert", "insert")
+        if st.button("Run Write Throughput Experiment"):
+            st.write("Running Write Throughput Experiment...")
+
+            try:
+                settings = [
+                    ("1", "chain"), ("3", "chain"), ("5", "chain"),
+                    ("1", "eventual"), ("3", "eventual"), ("5", "eventual")
+                ]
+                results = []
+                chain_throughput = []
+                eventual_throughput = []
+                x_labels = []
+
+                with tqdm(total=len(settings), desc="Running Experiment", unit="config") as pbar:
+                    progress_bar = st.progress(0)  # Initialize progress bar
+                    total_steps = len(settings)
+
+                    for i, (repl_factor, consistency) in enumerate(settings):
+                        progress_bar.progress(int((i / total_steps) * 100))  # Update progress
+
+                    # for repl_factor, consistency in settings:
+                        reset_status = reset_config(repl_factor, consistency)
+                        if reset_status != "OK":
+                            progress_bar.progress(100)
+                            raise Exception(f"Resetting configuration failed: {reset_status}")
+                        tqdm.write(
+                            f"\nSetting Replication Factor={repl_factor}, Consistency={consistency}: {reset_status}")
+
+                        success, elapsed_time, network_config, key_counter = process_insert_directory(insert_directory)
+                        if not success:
+                            progress_bar.progress(100)
+                            raise Exception(f"Processing insert directory: {insert_directory} failed")
+                        else:
+                            throughput = key_counter / elapsed_time
+                            results.append([repl_factor, consistency, key_counter, f"{elapsed_time:.2f} sec"])
+                            if consistency == "chain":
+                                chain_throughput.append(throughput)
+                            else:
+                                eventual_throughput.append(throughput)
+                            x_labels.append(f"{repl_factor}")
+
+                        pbar.update(1)
+                        progress_bar.progress(int(((i + 1) / total_steps) * 100))  # Update progress
+                        tqdm.write("Let the Conchord rest for 1 second.")
+                        time.sleep(1)
+                    progress_bar.progress(100)
+
+                df = pd.DataFrame(results,
+                                  columns=["Replication Factor", "Consistency", "Keys Inserted", "Time Taken (s)"])
+                df["Time Taken (s)"] = df["Time Taken (s)"].str.replace(" sec", "", regex=False).astype(float)
+                df["Write Throughput (Keys/sec)"] = df["Keys Inserted"] / df["Time Taken (s)"]
+                df = df.drop(columns=["Keys Inserted"])
+                st.table(df)
+                st.success("Write Throughput Experiment Completed")
+
+                col1, col2, col3 = st.columns([1,3,1])
+                with col2:
+                    fig, ax = plt.subplots(figsize=(8, 5))
+
+                    chain_color = "#80C7E0"  # Muted blue
+                    eventual_color = "#B490C0"  # Soft purple
+
+                    ax.plot(x_labels[:3], chain_throughput, marker='o', linestyle='-', color=chain_color,
+                            markersize=7, linewidth=2, alpha=0.8, label="Chain")
+                    ax.plot(x_labels[3:], eventual_throughput, marker='s', linestyle='-', color=eventual_color,
+                            markersize=7, linewidth=2, alpha=0.8, label="Eventual")
+                    ax.set_xlabel("Replication Factor", fontsize=11, fontweight='medium',
+                                  color="#E0E0E0")  # Soft gray-white
+                    ax.set_ylabel("Throughput (Keys/sec)", fontsize=11, fontweight='medium', color="#E0E0E0")
+                    ax.set_title("Write Throughput: Chain vs. Eventual Consistency", fontsize=13, fontweight='medium',
+                                 color="#F5F5F5")
+                    ax.grid(True, linestyle="--", alpha=0.3, color="gray")
+                    ax.spines["left"].set_color("#A0A0A0")  # Light gray for softer contrast
+                    ax.spines["bottom"].set_color("#A0A0A0")
+                    ax.spines["right"].set_color("none")
+                    ax.spines["top"].set_color("none")
+
+                    ax.legend(facecolor="#222831", edgecolor="#444", fontsize=10, loc="upper right", framealpha=0.6)
+                    st.pyplot(fig)
+
+
+            except Exception as e:
+                st.error(f"Error : {e}")
+
+    elif experiment_type == "Read Throughput":
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            insert_directory = st.text_input("Enter directory path for batch insert", "insert")
+        with col2:
+            query_directory = st.text_input("Enter directory path for batch queries", "queries")
+        if st.button("Run Read Throughput Experiment"):
+            st.write("Running Read Throughput Experiment...")
+
+            try:
+                settings = [
+                    ("1", "chain"), ("3", "chain"), ("5", "chain"),
+                    ("1", "eventual"), ("3", "eventual"), ("5", "eventual")
+                ]
+                results = []
+                chain_throughput = []
+                eventual_throughput = []
+                x_labels = []
+
+                with tqdm(total=len(settings), desc="Running Experiment", unit="config") as pbar:
+                    progress_bar = st.progress(0)  # Initialize progress bar
+                    total_steps = len(settings)
+
+                    for i, (repl_factor, consistency) in enumerate(settings):
+                        progress_bar.progress(int((i / total_steps) * 100))  # Update progress
+
+                    # for repl_factor, consistency in settings:
+                        reset_status = reset_config(repl_factor, consistency)
+                        if reset_status != "OK":
+                            progress_bar.progress(100)
+                            raise Exception(f"Resetting configuration failed: {reset_status}")
+                        tqdm.write(
+                            f"\nSetting Replication Factor={repl_factor}, Consistency={consistency}: {reset_status}")
+
+                        success, elapsed_time, network_config, key_counter = process_insert_directory(insert_directory)
+                        if not success:
+                            progress_bar.progress(100)
+                            raise Exception(f"Processing insert directory: {insert_directory} failed")
+
+                        success, elapsed_time, network_config, key_counter = process_query_directory(query_directory)
+
+                        if not success:
+                            progress_bar.progress(100)
+                            raise Exception(f"Processing insert directory: {insert_directory} failed")
+                        else:
+                            throughput = key_counter / elapsed_time
+                            results.append([repl_factor, consistency, key_counter, f"{elapsed_time:.2f} sec"])
+                            if consistency == "chain":
+                                chain_throughput.append(throughput)
+                            else:
+                                eventual_throughput.append(throughput)
+                            x_labels.append(f"{repl_factor}")
+
+                        pbar.update(1)
+                        progress_bar.progress(int(((i + 1) / total_steps) * 100))  # Update progress
+                        tqdm.write("Let the Conchord rest for 1 second.")
+                        time.sleep(1)
+                    progress_bar.progress(100)
+
+                df = pd.DataFrame(results,
+                                  columns=["Replication Factor", "Consistency", "Keys Queried", "Time Taken (s)"])
+                df["Time Taken (s)"] = df["Time Taken (s)"].str.replace(" sec", "", regex=False).astype(float)
+                df["Read Throughput (Queries/sec)"] = df["Keys Queried"] / df["Time Taken (s)"]
+                df = df.drop(columns=["Keys Queried"])
+                st.table(df)
+                st.success("Read Throughput Experiment Completed")
+
+
+                col1, col2, col3 = st.columns([1,3,1])
+                with col2:
+                    fig, ax = plt.subplots(figsize=(8, 5))
+
+                    chain_color = "#80C7E0"  # Muted blue
+                    eventual_color = "#B490C0"  # Soft purple
+
+                    ax.plot(x_labels[:3], chain_throughput, marker='o', linestyle='-', color=chain_color,
+                            markersize=7, linewidth=2, alpha=0.8, label="Chain")
+                    ax.plot(x_labels[3:], eventual_throughput, marker='s', linestyle='-', color=eventual_color,
+                            markersize=7, linewidth=2, alpha=0.8, label="Eventual")
+                    ax.set_xlabel("Replication Factor", fontsize=11, fontweight='medium',
+                                  color="#E0E0E0")  # Soft gray-white
+                    ax.set_ylabel("Read Throughput (Queries/sec)", fontsize=11, fontweight='medium', color="#E0E0E0")
+                    ax.set_title("Read Throughput: Chain vs. Eventual Consistency", fontsize=13, fontweight='medium',
+                                 color="#F5F5F5")
+                    ax.grid(True, linestyle="--", alpha=0.3, color="gray")
+                    ax.spines["left"].set_color("#A0A0A0")  # Light gray for softer contrast
+                    ax.spines["bottom"].set_color("#A0A0A0")
+                    ax.spines["right"].set_color("none")
+                    ax.spines["top"].set_color("none")
+
+                    ax.legend(facecolor="#222831", edgecolor="#444", fontsize=10, loc="upper left", framealpha=0.6)
+                    st.pyplot(fig)
+
+            except Exception as e:
+                st.error(f"Error on batch insert: {e}")
+
+    elif experiment_type == "Freshness":
+        request_directory = st.text_input("Enter request directory path", "requests")
+        if st.button("Run Freshness Experiment"):
+            st.write("Running Freshness Experiment...")
+            try:
+                settings = [("3", "chain"), ("3", "eventual")]
+
+                chain_results = []
+                eventual_results = []
+
+                with tqdm(total=len(settings), desc="Running Freshness Experiment", unit="config") as pbar:
+                    progress_bar = st.progress(0)  # Initialize progress bar
+                    total_steps = len(settings)
+
+                    for i, (repl_factor, consistency) in enumerate(settings):
+                        progress_bar.progress(int((i / total_steps) * 100))  # Update progress
+
+                    # for repl_factor, consistency in settings:
+                        reset_status = reset_config(repl_factor, consistency)
+                        if reset_status != "OK":
+                            progress_bar.progress(100)
+                            raise Exception(f"Resetting configuration failed: {reset_status}")
+                        tqdm.write(
+                            f"\nSetting Replication Factor={repl_factor}, Consistency={consistency}: {reset_status}")
+
+                        success, responses, network_config = process_request_directory(request_directory)
+                        if not success:
+                            progress_bar.progress(100)
+                            raise Exception(f"Processing directory: {request_directory} failed")
+
+                        if consistency == "chain":
+                            for key, value in responses:
+                                chain_results.append(["chain", key, value])
+                        else:
+                            for key, value in responses:
+                                eventual_results.append(["eventual", key, value])
+
+                        pbar.update(1)
+                        progress_bar.progress(int(((i + 1) / total_steps) * 100))  # Update progress
+                        tqdm.write("Let the Conchord rest for 1 second.")
+                        time.sleep(1)
+                    progress_bar.progress(100)
+
+                df_chain = pd.DataFrame(chain_results, columns=["Consistency", "Key", "Value"]).drop(
+                    columns=["Consistency"])
+                df_eventual = pd.DataFrame(eventual_results, columns=["Consistency", "Key", "Value"]).drop(
+                    columns=["Consistency"])
+
+                col1, col2 = st.columns([1,1])
+                with col1:
+                    df_chain_styled = df_chain.style.set_table_styles([
+                        {'selector': 'thead th:nth-child(1)', 'props': [('width', '10%')]},  # Index
+                        {'selector': 'thead th:nth-child(2)', 'props': [('width', '30%')]},  # Key
+                        {'selector': 'thead th:nth-child(3)', 'props': [('width', '60%')]}  # Value
+                    ])
+                    st.markdown("<h3 style='text-align: center;'>Chain Consistency Results</h3>", unsafe_allow_html=True)
+                    st.dataframe(df_chain_styled, use_container_width=True)
+                with col2:
+                    df_eventual_styled = df_eventual.style.set_table_styles([
+                        {'selector': 'thead th:nth-child(1)', 'props': [('width', '10%')]},  # Index
+                        {'selector': 'thead th:nth-child(2)', 'props': [('width', '30%')]},  # Key
+                        {'selector': 'thead th:nth-child(3)', 'props': [('width', '60%')]}  # Value
+                    ])
+                    st.markdown("<h3 style='text-align: center;'>Eventual Consistency Results</h3>", unsafe_allow_html=True)
+                    st.dataframe(df_eventual_styled, use_container_width=True)
+
+                import difflib
+
+                df_chain_reset = df_chain.reset_index()
+                df_eventual_reset = df_eventual.reset_index()
+                df_diff = df_chain_reset.copy()
+                df_diff["Eventual"] = df_eventual_reset["Value"]
+                df_diff_filtered = df_diff[df_diff["Value"] != df_diff["Eventual"]].drop(columns=["index"])
+                df_diff_filtered = df_diff_filtered.rename(columns={"Value": "Chain"})
+
+                def get_extra_words(chain_val, eventual_val):
+                    chain_words = set(str(chain_val).split(", "))  # Convert to sets for comparison
+                    eventual_words = set(str(eventual_val).split(", "))
+                    extra_in_chain = ", ".join(chain_words - eventual_words) if chain_words - eventual_words else None
+                    extra_in_eventual = ", ".join(
+                        eventual_words - chain_words) if eventual_words - chain_words else None
+                    return pd.Series([extra_in_chain, extra_in_eventual], index=["Extra in Chain", "Extra in Eventual"])
+                df_extra = df_diff_filtered.apply(lambda row: get_extra_words(row["Chain"], row["Eventual"]), axis=1)
+                df_final = df_diff_filtered.join(df_extra)
+                df_final = df_final.dropna(axis=1, how="all")
+
+                st.markdown("<h3 style='text-align: center;'>Diff</h3>", unsafe_allow_html=True)
+                st.dataframe(df_final, use_container_width=True)
+
+                st.success("Experiment Completed")
+            except Exception as e:
+                st.error(f"Error: {e}")
 
 # ---- FOOTER ----
 current_year = datetime.datetime.now().year

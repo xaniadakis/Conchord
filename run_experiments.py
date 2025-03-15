@@ -70,7 +70,6 @@ def process_insert_directory(directory):
     elapsed_time = time.time() - start_time
     return True, elapsed_time, network_config, key_counter
 
-
 def process_query_directory(directory):
     """Process batch queries from directory files."""
     if not os.path.exists(directory) or not os.path.isdir(directory):
@@ -106,12 +105,13 @@ def process_query_directory(directory):
     elapsed_time = time.time() - start_time
     return True, elapsed_time, network_config, key_counter
 
-def process_request_directory(request_directory, consistency_type):
+def process_request_directory(request_directory):
     """Process insert and query requests from all files in a directory."""
     if not os.path.exists(request_directory) or not os.path.isdir(request_directory):
         return False, "Directory not found", None
 
     config_response = send_command("get_network_config").strip()
+    replication_factor, consistency = None, None
     if ":" in config_response:
         replication_factor, consistency = config_response.split(":")
         network_config = f"Replication Factor: {replication_factor}, Consistency: {consistency}"
@@ -139,32 +139,44 @@ def process_request_directory(request_directory, consistency_type):
                     command = f"query \"{key}\""
                     response = send_command(command)
                     responses.append((key, response))
+            # if consistency == "chain":
+            #     input("\nPress Enter to carry on with next requests file...")
     return True, responses, network_config
 
 def run_freshness_experiment(request_directory):
-    """Run an experiment to compare freshness between linearization and eventual consistency."""
-    settings = [("3", "linearization"), ("3", "eventual")]
-    results = []
+    """Run an experiment to compare freshness between chain and eventual consistency."""
+    settings = [("3", "chain"), ("3", "eventual")]
+    chain_results = []
+    eventual_results = []
 
     with tqdm(total=len(settings), desc="Running Freshness Experiment", unit="config") as pbar:
         for repl_factor, consistency in settings:
             reset_status = reset_config(repl_factor, consistency)
             tqdm.write(f"\nSetting Replication Factor={repl_factor}, Consistency={consistency}: {reset_status}")
 
-            success, responses, network_config = process_request_directory(request_directory, consistency)
+            success, responses, network_config = process_request_directory(request_directory)
             if not success:
                 print(f"Failed to process requests from {request_directory}")
                 os._exit(1)
-            for key, value in responses:
-                results.append([consistency, key, value])
+
+            if consistency == "chain":
+                for key, value in responses:
+                    chain_results.append(["chain", key, value])
+            else:
+                for key, value in responses:
+                    eventual_results.append(["eventual", key, value])
+
             pbar.update(1)
             tqdm.write("Let the Conchord rest for 1 second.")
-            time.sleep(1)
 
-    df = pd.DataFrame(results, columns=["Consistency", "Key", "Value"])
-    save_results_to_csv(df, "freshness_experiment.csv")
+    # Save results to separate CSV files
+    df_chain = pd.DataFrame(chain_results, columns=["Consistency", "Key", "Value"]).drop(columns=["Consistency"])
+    df_eventual = pd.DataFrame(eventual_results, columns=["Consistency", "Key", "Value"]).drop(columns=["Consistency"])
 
-    input("\nSaved results to freshness_experiment.csv\nPress Enter to return to the menu...")
+    save_results_to_csv(df_chain, "chain_freshness_experiment.csv")
+    save_results_to_csv(df_eventual, "eventual_freshness_experiment.csv")
+
+    input("\nSaved results to freshness_chain.csv and freshness_eventual.csv\nPress Enter to return to the menu...")
 
 def reset_config(replication_factor, consistency_type):
     """Reset the network configuration."""
@@ -181,7 +193,6 @@ def reset_config(replication_factor, consistency_type):
         return f"Error: {response}"
 
     return f"Error: {response}"
-
 
 def run_insert_experiment(directory):
     try:
@@ -281,18 +292,18 @@ if __name__ == "__main__":
         choice = print_menu()
 
         if choice == "1":
-            directory = input("Enter directory path for batch insert during experiment: ")
+            insert_directory = input("Enter directory path for batch insert during experiment: ") or "insert"
             print("Will run write throughput experiment for yall!")
-            run_insert_experiment(directory)
+            run_insert_experiment(insert_directory)
 
         elif choice == "2":
-            insert_directory = input("Enter directory path for batch insert during experiment: ")
-            queries_directory = input("Enter directory path for batch queries during experiment: ")
+            insert_directory = input("Enter directory path for batch insert during experiment: ") or "insert"
+            queries_directory = input("Enter directory path for batch queries during experiment: ") or "queries"
             print("Will run read throughput experiment for yall!")
             run_query_experiment(insert_directory, queries_directory)
 
         elif choice == "3":
-            request_directory = input("Enter request directory path for freshness experiment: ")
+            request_directory = input("Enter request directory path for freshness experiment: ") or "requests"
             print("Will run freshness experiment for yall!")
             run_freshness_experiment(request_directory)
 

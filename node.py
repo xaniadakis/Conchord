@@ -282,11 +282,13 @@ class Node:
             elif command == "query":
                 key = parts[1]
                 initial_node, hops = None, 0
+                if len(parts) >= 3:
+                    hops = int(parts[2])
                 if len(parts) == 4:
                     initial_node = parts[3]
-                elif len(parts) == 3:
-                    hops = int(parts[2])
-                response = f"{self.query(key, hops=hops, initial_node=initial_node)}"
+                value = self.query(key, hops=hops, initial_node=initial_node)
+                print(f"found {key} {value}.")
+                response = f"{value}"
             elif command == "delete":
                 key = parts[1]
                 if len(parts) == 3:
@@ -317,7 +319,7 @@ class Node:
         if self.responsible_for(hashed_key) or replica_count>0:
             #print(f"Node {self.node_id} is responsible for key {hashed_key}")
             if replica_count==0:
-                self.log(f"Responsible for key {key}")
+                self.log(f"Responsible for key {key}:{value}")
             if key in self.data.keys():
                 # no duplicates
                 existing_values = self.data[key].split(", ")
@@ -388,16 +390,19 @@ class Node:
             else:
                 return self.forward_request("query", key)
         elif self.consistency == "eventual":
+            if initial_node is None:
+                self.log(f"First eventual query call: {key}")
+                initial_node = self.node_id
+            else:
+                self.log(f"{hops}) eventual query call: {key}, init_node: {initial_node}")
             if key in self.data.keys():
                 self.log(f"found {key}")
                 return self.data[key]
-
-            # Stop forwarding after too many hops (to prevent infinite loops)
-            if hops >= self.replication_factor + 1:
-                self.log(f"Query for key '{key}' stopped: max hops reached.")
+            if self.successor.node_id == int(initial_node):
+                self.log(f"{Fore.YELLOW}Last eventual query call. Key {key} not found.{Style.RESET_ALL}")
                 return "Key not found"
-
-            return self.forward_request("query", key, hops=hops + 1)
+            return self.forward_request("query", key, hops=hops+1, initial_node=initial_node)
+        return "Key not found"
 
     def delete(self, key, replica_count=0):
         hashed_key = hash_key(key)
