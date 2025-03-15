@@ -58,3 +58,10 @@ The `client.py` script allows interaction with the Chord network using commands 
 ### Bulk Insert from Files
 - The client automatically processes `insert_*.txt` files from the `insert/` directory.
 - After the client finishes populating the nodes, tap the **Refresh** button to display the latest node storage information.
+
+cd ~/conchord
+source .venv/bin/activate
+sudo $(which streamlit) run gui_client.py --server.port 80
+
+./kill_nodes.sh && ./update_vm_node.sh &&./run_nodes.sh
+scp -i ~/.ssh/private_key team_2-vm1:~/conchord/*_experiment.csv ./
