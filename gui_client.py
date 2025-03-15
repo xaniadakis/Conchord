@@ -11,6 +11,10 @@ from tqdm import tqdm  # You may need to install this with pip if not installed
 import os
 import time
 import matplotlib.pyplot as plt
+import subprocess
+
+from chord_network import BOOTSTRAP_IP
+
 plt.style.use("dark_background")
 
 # ---- PAGE CONFIG ----
@@ -38,76 +42,98 @@ if "query_key" not in st.session_state:
     st.session_state["query_key"] = ""
 if "delete_key" not in st.session_state:
     st.session_state["delete_key"] = ""
+
+# Global dictionary to store node information
+st.session_state["node_info"] = {}
+VM_MAPPING = {
+    "10.0.9.91": 1,
+    "10.0.9.86": 2,
+    "10.0.9.176": 3,
+    "10.0.9.31": 4,
+    "10.0.9.160": 5
+}
 import subprocess
+import os
+import time
+import socket
 
-import subprocess
+BOOTSTRAP_IP = '127.0.0.1'
+BOOTSTRAP_PORT = 5000
 
+def ssh_run_node(vm_number, ip, port, is_bootstrap=False,
+                 replication_factor=3, consistency="chain",
+                 bootstrap_ip=BOOTSTRAP_IP, bootstrap_port=BOOTSTRAP_PORT):
+    """Start a new node (locally or remotely via SSH) and confirm when it's running."""
+    print(f"[INFO] Starting node: IP={ip}, Port={port}, VM={vm_number}, Bootstrap={is_bootstrap}")
 
-def ssh_run_node(vm_number, ip, port, bootstrap_ip=None, bootstrap_port=5000, is_bootstrap=False):
-    """SSH into the selected VM and start a new node correctly, with verbose output."""
+    # Ensure absolute path to node.py
+    node_path = os.path.expanduser("~/conchord/node.py") if int(vm_number) > 0 else "./node.py"
+    log_path = os.path.expanduser(f"~/conchord/logs/node_{port}.log") if int(vm_number) > 0 else f"./logs/node_{port}.log"
 
-    print(f"[INFO] Starting node: IP={ip}, Port={port}, VM={vm_number}")
+    # Ensure logs directory exists
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
-    if bootstrap_ip is None:
-        bootstrap_ip = ip  # If no bootstrap IP provided, assume this is the bootstrap
-        print(f"[INFO] No bootstrap IP provided. Assuming this node is the bootstrap.")
-
-    if bootstrap_port is None:
-        bootstrap_port = port  # Fix: Assigning bootstrap PORT, not IP
-        print(f"[INFO] No bootstrap port provided. Using {bootstrap_port}.")
-
-    if int(vm_number) < 0:
-        # Run locally if VM number is negative
-        print(f"[INFO] Running locally on this machine.")
-        command = (
-            f"python3 ./node.py --ip {ip} --port {port} "
-            f"--bootstrap_ip {bootstrap_ip} --bootstrap_port {bootstrap_port}"
-        )
-        if is_bootstrap:
-            command += " --bootstrap"
+    # Construct the correct command
+    if is_bootstrap:
+        command = f"nohup python3 {node_path} --ip {ip} --port {port} --bootstrap --replication_factor {replication_factor} --consistency {consistency} > {log_path} 2>&1 &"
     else:
-        # Run remotely using SSH
-        vm_alias = f"team_2-vm{vm_number}"  # Use the configured alias
-        print(f"[INFO] Running remotely on {vm_alias} via SSH.")
-        command = (
-            f"ssh {vm_alias} 'python3 ~/conchord/node.py --ip {ip} --port {port} "
-            f"--bootstrap_ip {bootstrap_ip} --bootstrap_port {bootstrap_port}"
-        )
-        if is_bootstrap:
-            command += " --bootstrap'"
-        else:
-            command += "'"
+        if bootstrap_ip is None or bootstrap_port is None:
+            print(f"[ERROR] Non-bootstrap nodes require bootstrap_ip and bootstrap_port.")
+            return f"Error: Missing bootstrap IP/port for non-bootstrap node."
+        command = f"nohup python3 {node_path} --ip {ip} --port {port} --bootstrap_ip {bootstrap_ip} --bootstrap_port {bootstrap_port} > {log_path} 2>&1 &"
 
-    print(f"[DEBUG] Executing command: {command}")
+    # Decide whether to run locally or via SSH
+    if int(vm_number) < 0:
+        print(f"[INFO] Running locally on this machine.")
+        shell_command = f"/bin/bash -c '{command}'"
+    else:
+        vm_alias = f"team_2-vm{vm_number}"
+        print(f"[INFO] Running remotely on {vm_alias} via SSH.")
+        shell_command = f"ssh {vm_alias} '/bin/bash -c \"{command}\"'"
+
+    print(f"[DEBUG] Executing command: {shell_command}")
 
     try:
-        # Use subprocess with real-time output streaming
-        with subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
-            for line in proc.stdout:
-                print(f"[STDOUT] {line.strip()}")  # Live output streaming
-            for line in proc.stderr:
-                print(f"[STDERR] {line.strip()}")  # Live error streaming
+        # Run command in background
+        result = subprocess.run(shell_command, shell=True, executable="/bin/bash", capture_output=True, text=True)
 
-            proc.wait()  # Wait for the process to finish
+        if result.returncode == 0:
+            print(f"[INFO] Node process started, checking if it's running...")
 
-            if proc.returncode == 0:
-                print(f"[SUCCESS] Node started successfully on {ip}:{port}.")
-                return f"Success: Node started on {ip}:{port}"
-            else:
-                print(f"[ERROR] Node failed to start. Return code: {proc.returncode}")
-                return f"Error: Node failed to start. Return code: {proc.returncode}"
+            # Wait and check if the node is reachable
+            for i in range(10):
+                time.sleep(1)
+                if is_node_running(ip, port):
+                    print(f"[SUCCESS] Node is running on {ip}:{port} ✅")
+                    return f"Success: Node started and running on {ip}:{port}"
+                print(f"[INFO] Waiting for node to start... ({i+1}/10)")
+
+            print(f"[ERROR] Node process started but not responding on {ip}:{port}.")
+            return f"Error: Node process started but not responding."
+
+        else:
+            print(f"[ERROR] Node failed to start. Return code: {result.returncode}")
+            print(f"[STDERR] {result.stderr.strip()}")
+            return f"Error: Node failed to start. Return code: {result.returncode}, Error: {result.stderr.strip()}"
 
     except Exception as e:
         print(f"[EXCEPTION] SSH Connection Error: {e}")
         return f"SSH Connection Error: {e}"
 
+def is_node_running(ip, port):
+    """Check if the node is listening on the given IP and port."""
+    try:
+        with socket.create_connection((ip, port), timeout=1):
+            return True
+    except (socket.timeout, ConnectionRefusedError):
+        return False
 
 # ---- FUNCTION: SEND COMMAND TO CHORD NETWORK ----
 def send_command(command):
     """Send a command to the bootstrap node and return the response."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-            client.connect(('127.0.0.1', 5000))  # Connect to bootstrap node
+            client.connect((BOOTSTRAP_IP, BOOTSTRAP_PORT))  # Connect to bootstrap node
             client.sendall(command.encode())
 
             response = []
@@ -132,6 +158,15 @@ def fetch_nodes():
 
         nodes = json.loads(response)  # Parse JSON safely
         print(nodes)
+        # Store node details globally for later use (departing nodes)
+        st.session_state["node_info"] = {
+            str(node_id): {
+                "ip": details.get("ip"),
+                "port": details.get("port"),
+                "vm": VM_MAPPING.get(details.get("ip"), -1)
+            }
+            for node_id, details in nodes.items()
+        }
         return nodes
 
     except json.JSONDecodeError:
@@ -162,7 +197,8 @@ def visualize_chord_ring():
     nodes = fetch_nodes()
 
     if "error" in nodes:
-        st.error(f"Failed to fetch network: {nodes['error']}")
+        st.error(f"No network to visualize")
+        print(f"Failed to fetch network: {nodes['error']}")
         return
 
     fig, ax = plt.subplots(figsize=(7, 5))
@@ -495,16 +531,23 @@ elif selected == "Overlay":
 
         st.markdown("### Join the Network")
 
-        col27, col28, col29, col210, col299 = st.columns([4, 2, 2, 2, 2])
+        col27, col28, col29, col299 = st.columns([4, 2, 2, 2])
         # JOIN SECTION
         with col27:
             join_ip = st.text_input("Enter IP Address:", key="join_ip")
+            is_bootstrap = st.checkbox("Bootstrap", key="is_bootstrap", value=False)
         with col28:
             join_port = st.text_input("Enter Port:", key="join_port")
         with col29:
             join_vm = st.text_input("Enter VM Number:", key="join_vm")
-        with col29:
-            is_bootstrap = st.checkbox("Bootstrap", key="is_bootstrap")
+        join_replication_factor, join_consistency = None, None
+        if is_bootstrap:
+            col30, col31 = st.columns([2, 2])
+            with col30:
+                join_replication_factor = st.text_input("Replication Factor:", value="3", key="join_replication_factor")
+            with col31:
+                join_consistency = st.selectbox("Consistency:", ["chain", "eventual"], key="join_consistency")
+
         with col299:
             st.markdown(
                 """
@@ -520,9 +563,21 @@ elif selected == "Overlay":
             )
             if st.button("Join"):
                 if join_ip.strip() and join_port.strip() and join_vm.strip():
-                    response = ssh_run_node(join_vm, join_ip, join_port, "127.0.0.1",
-                                            "5000", is_bootstrap)  # Bootstrap IP and Port are fixed
-                    st.success(f"Response: {response}")
+                    response = ssh_run_node(vm_number=join_vm,
+                                            ip=join_ip,
+                                            port=join_port,
+                                            bootstrap_ip=BOOTSTRAP_IP,
+                                            bootstrap_port=BOOTSTRAP_PORT,
+                                            is_bootstrap=is_bootstrap,
+                                            replication_factor=join_replication_factor,
+                                            consistency=join_consistency)
+                    st.success(f"{response}")
+                    time.sleep(0.2)
+                    if "Success" in response:
+                        if is_bootstrap:
+                            BOOTSTRAP_IP = join_ip
+                            BOOTSTRAP_PORT = join_port
+                        st.rerun()
                 else:
                     st.error("Please enter IP address, Port, and VM Number.")
 
@@ -547,9 +602,39 @@ elif selected == "Overlay":
             )
             if st.button("Depart"):
                 if depart_node_id.strip():
-                    command = f'depart {depart_node_id}'
-                    response = send_command(command)
-                    st.warning(f"Response: {response}")
+                    # Search for the full node ID based on the last 4 digits
+                    matched_nodes = [
+                        full_id for full_id in st.session_state["node_info"]
+                        if full_id.endswith(depart_node_id)
+                    ]
+
+                    if not matched_nodes:
+                        st.error("No matching node found with the given last 4 digits.")
+                    elif len(matched_nodes) > 1:
+                        st.error("Multiple nodes found with the same last 4 digits. Please specify more uniquely.")
+                    else:
+                        full_node_id = matched_nodes[0]
+                        node_info = st.session_state["node_info"].get(full_node_id)
+
+                        if node_info:
+                            vm_number = node_info["vm"]
+                            ip = node_info["ip"]
+                            port = node_info["port"]
+                            vm_alias = f"team_2-vm{vm_number}"
+                            kill_command = f"kill -2 $(lsof -t -i :{port})"
+
+                            if vm_number == -1:
+                                subprocess.run(kill_command, shell=True)
+                                st.success(f"Node {depart_node_id} departed successfully from local machine.")
+                            else:
+                                # SSH into the correct VM and kill the process
+                                ssh_command = f"ssh {vm_alias} '{kill_command}'"
+                                subprocess.run(ssh_command, shell=True)
+                                st.success(f"Node {depart_node_id} departed successfully from {vm_alias}.")
+
+                            st.rerun()
+                        else:
+                            st.error("Node ID not found in stored overlay.")
                 else:
                     st.error("Please enter a valid Node ID.")
 
