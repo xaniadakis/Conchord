@@ -5,7 +5,6 @@ import json
 import argparse
 from colorama import Fore, Style, init
 import signal
-import sys
 import os
 
 # Initialize colorama (ensures Windows compatibility)
@@ -94,6 +93,47 @@ class Node:
                 client.connect((self.successor.ip, self.successor.port))
                 client.sendall(f"update_predecessor {self.ip} {self.port}".encode())
                 self.log(f"Successfully joined the Chord ring.")
+
+            # Request keys that now belong to this new node
+            # The successor transfers to the new node - predecessor - the primary data it is responsible for,
+            # along with all its replicas. The successor then increments the hop count for all transferred data
+            # and propagates this update to the next successors.  If the hop count exceeds the replication factor,
+            # the corresponding keys are deleted.
+            self.log(f"Requesting keys from successor {self.successor.ip}:{self.successor.port}")
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                client.connect((self.successor.ip, self.successor.port))
+                client.sendall(f"transfer_keys {self.node_id}".encode())  # Send request with new node's ID
+                client.settimeout(2)  # Set timeout of 2s for receiving data
+                received_data = []
+                try:
+                    while True:
+                        chunk = client.recv(4096).decode()
+                        # No more data, stop reading
+                        if not chunk:
+                            break
+                        received_data.append(chunk)
+                        if len(chunk) < 4096:
+                            break
+                except socket.timeout:
+                    print("[ERROR] Receiving data timed out after 2 seconds.")
+
+                self.log(f"I received {len(received_data)} bytes for transfer_keys.")
+
+            # If data received, store in this node's data and acknowledge
+            if received_data:
+                try:
+                    transferred_keys = json.loads("".join(received_data))  # Convert list to a single JSON string
+                    self.data.update(transferred_keys)
+                    self.log(f"Received {len(transferred_keys)} keys from successor.")
+
+                    # Send acknowledgment to successor
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                        client.connect((self.successor.ip, self.successor.port))
+                        client.sendall("ACK".encode())
+                except json.JSONDecodeError as e:
+                    self.log(f"{Fore.RED}ERROR: Failed to parse received key data: {e}{Style.RESET_ALL}")
+            else:
+                self.log(f"Did not receive transfer_keys")
 
         except Exception as e:
             self.log(f"{Fore.RED}ERROR: Join failed - {e}{Style.RESET_ALL}")
@@ -191,7 +231,21 @@ class Node:
 
     def handle_request(self, client):
         try:
-            request = client.recv(1024).decode().strip()
+            client.settimeout(2)
+            buffer = []
+            try:
+                while True:
+                    chunk = client.recv(4096).decode()
+                    # No more data, stop reading
+                    if not chunk:
+                        break
+                    buffer.append(chunk)
+                    if len(chunk) < 4096:
+                        break
+            except socket.timeout:
+                print("[ERROR] Receiving data timed out after 2 seconds.")
+            request = "".join(buffer).strip()
+
             parts = custom_split(request)
             command = parts[0].lower()
 
@@ -261,13 +315,131 @@ class Node:
                 else:
                     response = "ERROR: Malformed update_successor command"
             elif command == "transfer_keys":
-                transfer_data = {key: value for key, value in self.data.items() if hash_key(key) <= self.node_id}
-                self.data = {k: v for k, v in self.data.items() if k not in transfer_data}  # Remove transferred keys
-                response = str(transfer_data)
+                if len(parts) == 2:
+                    new_node_id = int(parts[1])  # The ID of the new joining node
+                    self.log(f"Transferring primary keys to new predecessor {str(new_node_id)[-4:]}.")
+                    # Find primary keys (hop == 0) that should be transferred to the new node
+                    primary_transfer_data = {key: value for key, value in self.data.items()
+                                     if value["hop"] == 0 and hash_key(key) <= new_node_id}
+                    self.log(f"Found {len(primary_transfer_data)} primary keys to transfer.")
+
+                    replica_transfer_data = {key: value for key, value in self.data.items()
+                                     if value["hop"] > 0}
+                    self.log(f"Found {len(replica_transfer_data)} replicas to transfer.")
+
+                    combined_transfer_data = primary_transfer_data.copy()
+                    combined_transfer_data.update(replica_transfer_data)
+                    self.log(f"Total keys to transfer (primary + replicas): {len(combined_transfer_data)}")
+
+                    # Delete keys where hop > replication_factor - 1
+                    old_data_size = len(self.data)
+                    self.data = {k: v for k, v in self.data.items()
+                                 if not (k in combined_transfer_data and v["hop"] > self.replication_factor - 1)}
+                    new_data_size = len(self.data)
+                    self.log(f"Deleted {old_data_size - new_data_size} keys (hop > {self.replication_factor - 1}). "
+                             f"Now have {new_data_size} keys.")
+
+                    # # Increment hop for all keys that we sent to the predecessor
+                    # for key in combined_transfer_data:
+                    #     if key in self.data:
+                    #         self.data[key]["hop"] += 1  # Increment hop count
+
+                    # notify successors to increment hop on those keys too,
+                    # and delete the ones that surpass the replication factor.
+                    combined_transfer_keys = set(combined_transfer_data.keys())  # Get only the keys
+                    if len(combined_transfer_keys) > 0:
+                        # Ensure keys are clean before JSON serialization
+                        # cleaned_transfer_keys = [key.strip('"') for key in combined_transfer_keys]
+
+                        increment_hop_response = self.forward_request("increment_hop",
+                                                                      json.dumps(list(combined_transfer_keys)))
+
+                        # increment_hop_response = self.forward_request("increment_hop", list(combined_transfer_keys))
+                        # self.log(f"received response from {str(self.successor.node_id)[-4:]} : {increment_hop_response}")
+
+                    # Send the relevant keys to the requesting node
+                    response = json.dumps(combined_transfer_data)
+                else:
+                    response = json.dumps({"error": "Invalid transfer_keys command format"})
+
+            elif command == "increment_hop":
+                if len(parts) == 2:
+                    try:
+                        # deserialize JSON argument to list
+                        keys_to_increment_hop = json.loads(parts[1])
+                        if not isinstance(keys_to_increment_hop, list):  # Ensure it's a list
+                            response = "ERROR: Expected a list of keys"
+                        else:
+                            # Increment hop on those keys
+                            for key in keys_to_increment_hop:
+                                # cleaned_key = key.strip().strip('"')  # Remove extra quotes/spaces
+
+                                # print(f"KEY {cleaned_key}")
+                                if key in self.data.keys():
+                                    self.data[key]["hop"] += 1
+                            # for key in self.data[5:]:
+                            #     print(f"DICTKEY {key}")
+                            # Delete keys where hop > replication_factor - 1
+                            old_data_size = len(self.data)
+                            self.data = {k: v for k, v in self.data.items() if not v["hop"] > self.replication_factor - 1}
+                            new_data_size = len(self.data)
+                            self.log(
+                                f"Deleted {old_data_size - new_data_size} keys (hop > {self.replication_factor - 1}). "
+                                f"Now have {new_data_size} keys.")
+                            print(f"old_data_size: {old_data_size}")
+                            print(f"new_data_size: {new_data_size}")
+                            print(f"len(keys_to_increment_hop): {len(keys_to_increment_hop)}")
+                            if not old_data_size == new_data_size and len(keys_to_increment_hop) > 0:
+                                increment_hop_response = self.forward_request("increment_hop",
+                                                                              json.dumps(list(keys_to_increment_hop)))
+
+                                self.log(
+                                    f"received response from {str(self.successor.node_id)[-4:]} : {increment_hop_response}")
+                            response = "ACK"
+                    except json.JSONDecodeError:
+                        response = "ERROR: Malformed JSON in increment_hop"
+                else:
+                    response = "ERROR: Malformed increment_hop command"
             elif command == "receive_keys":
-                keys_data = eval(" ".join(parts[1:]))  # Convert back to dictionary
-                self.data.update(keys_data)
                 response = "ACK"
+                # try:
+                #     keys_data = json.loads(" ".join(parts[1:]))
+                #     # self.log(f"DATA: {keys_data}")
+                #     transferred_count = 0
+                #     transfer_data = {}
+                #
+                #     for key, value in keys_data.items():
+                #         if key in self.data:
+                #             # If the key already exists, decrement the hop count
+                #             self.data[key]["hop"] = self.data[key]["hop"] - 1
+                #             transfer_data[key] = self.data[key]
+                #         else:
+                #             # Insert the key with the received hop count and value
+                #             self.data[key] = {"value": value["value"], "hop": value["hop"]}
+                #             transferred_count += 1
+                #
+                #     self.log(f"Received {keys_data} and stored {transferred_count} new keys after node departure.")
+                #
+                #     # Propagate the key transfer process to the next successor
+                #     if len(transfer_data) > 0:
+                #         self.log(f"Will propagate {len(transfer_data)} changes to {self.successor.node_id}")
+                #         if self.successor.node_id != self.node_id:
+                #             try:
+                #                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                #                     client.connect((self.successor.ip, self.successor.port))
+                #                     client.sendall(f"receive_keys {json.dumps(transfer_data)}".encode())
+                #                     ack = client.recv(1024).decode()
+                #                     if ack == "ACK":
+                #                         self.log(f"Successor {self.successor.node_id} acknowledged key transfer.")
+                #                     else:
+                #                         self.log(
+                #                             f"[ERROR] Successor {self.successor.node_id} did not acknowledge key transfer: {ack}")
+                #             except Exception as e:
+                #                 self.log(
+                #                     f"[ERROR] Could not propagate keys to successor {self.successor.node_id}: {e}")
+                #     response = "ACK"
+                # except json.JSONDecodeError:
+                #     response = "ERROR: Invalid key transfer data format"
 
             elif command == "insert":
                 key, value = parts[1], parts[2]
@@ -320,14 +492,15 @@ class Node:
             #print(f"Node {self.node_id} is responsible for key {hashed_key}")
             if replica_count==0:
                 self.log(f"Responsible for key {key}:{value}")
-            if key in self.data.keys():
+            if key in self.data:
                 # no duplicates
-                existing_values = self.data[key].split(", ")
+                existing_values = self.data[key]["value"].split(", ")
                 # concatenate for update
                 if value not in existing_values:
-                    self.data[key] += f", {value}"
+                    self.data[key]["value"] += f", {value}"
             else:
-                self.data[key] = value
+                self.data[key] = {"value": value, "hop": replica_count}
+
             if replica_count < self.replication_factor - 1:
                 if self.consistency == "chain":
                     return self.chain_replicate("insert", key, value, replica_count)
@@ -354,8 +527,8 @@ class Node:
             # the last node before bootstrap returns its data
             if self.successor.node_id == int(initial_node):
                 self.log(f"Last query * call, added {len(self.data)}")
-                response = json.dumps(self.data, indent=4)
-                return response
+                # return json.dumps(self.data, indent=4)
+                return json.dumps({k: v["value"] for k, v in self.data.items()}, indent=4)
 
             # forward request to the successor, waiting for their response
             response = self.forward_request("query", key, initial_node=initial_node)
@@ -363,7 +536,8 @@ class Node:
             # parse response safely
             if not response.strip():
                 self.log(f"{Fore.RED}ERROR: Empty response received!{Style.RESET_ALL}")
-                return json.dumps(self.data, indent=4)
+                # return json.dumps(self.data, indent=4)
+                return json.dumps({k: v["value"] for k, v in self.data.items()}, indent=4)
 
             # convert response to dict
             try:
@@ -371,22 +545,21 @@ class Node:
             except json.JSONDecodeError as e:
                 self.log(f"{Fore.RED}ERROR: JSON decode failed: {e}, response: {response}{Style.RESET_ALL}")
                 # if failed return my data
-                return json.dumps(self.data, indent=4)
+                # return json.dumps(self.data, indent=4)
+                return json.dumps({k: v["value"] for k, v in self.data.items()}, indent=4)
 
             before = len(received_data)
-
             # extend dict with current node's data
-            received_data.update(self.data)
-
+            # received_data.update(self.data)
+            received_data.update({k: v["value"] for k, v in self.data.items()})
             after = len(received_data)
             self.log(f"Added: {after - before} pairs, now hold: {after}")
             return json.dumps(received_data, indent=4)
-
         if self.consistency == "chain":
             if self.responsible_for(hashed_key) or hops > 0:
                 if hops < self.replication_factor - 1:
                     return self.forward_request("query", key, hops=hops + 1)
-                return self.data.get(key, "Key not found")
+                return self.data[key]["value"] if key in self.data else "Key not found"
             else:
                 return self.forward_request("query", key)
         elif self.consistency == "eventual":
@@ -397,7 +570,7 @@ class Node:
                 self.log(f"{hops}) eventual query call: {key}, init_node: {initial_node}")
             if key in self.data.keys():
                 self.log(f"found {key}")
-                return self.data[key]
+                return self.data[key]["value"]
             if self.successor.node_id == int(initial_node):
                 self.log(f"{Fore.YELLOW}Last eventual query call. Key {key} not found.{Style.RESET_ALL}")
                 return "Key not found"
@@ -444,7 +617,9 @@ class Node:
             self.log(f"Lazy forwarding to {successor.ip}:{successor.port} for key {key}")
             successor.forward_request(command, key, value, replica_count=replica_count + 1)
 
-    def forward_request(self, command, key=None, value=None, replica_count=0, hops=0, initial_node=None, replication_factor=None, consistency=None):
+    def forward_request(self, command, key=None, value=None, replica_count=0,
+                        hops=0, initial_node=None, replication_factor=None,
+                        consistency=None, combined_transfer_keys=None):
         """Forwards request to successor, passing the baton along."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             client.settimeout(2)  # Prevent infinite waiting
@@ -463,6 +638,8 @@ class Node:
                 message += f" {initial_node}"
             if replication_factor is not None and consistency is not None and initial_node is not None:
                 message += f" {replication_factor} {consistency} {initial_node}"
+            if combined_transfer_keys is not None:
+                message += f" {combined_transfer_keys}"
 
             client.sendall(message.encode())
 
@@ -500,11 +677,16 @@ class Node:
         self.log(f"Departing...")
 
         # Step 1: Transfer keys to successor before leaving
+        # Each node transfers all its primary and replica keys to its successor.
+        # If the successor already holds these keys, their hop count is decremented.
+        # Otherwise, the keys are inserted along with their values.
+        # This process is then propagated to the following successors in the network.
         if self.successor.node_id != self.node_id:
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
                     client.connect((self.successor.ip, self.successor.port))
-                    client.sendall(f"receive_keys {str(self.data)}".encode())
+                    self.log(f"DATA: {self.data}")
+                    client.sendall(f"receive_keys {json.dumps(self.data)}".encode())
                     ack = client.recv(1024).decode()
                     if ack != "ACK":
                         self.log(f"{Fore.RED}ERROR: Successor {str(self.successor.node_id)[-4:]} did not confirm key transfer: {ack}{Style.RESET_ALL}")
@@ -540,6 +722,7 @@ class Node:
                         self.log(f"{Fore.GREEN}Successor {str(self.successor.node_id)[-4:]} did acknowledge predecessor update!{Style.RESET_ALL}")
             except Exception as x:
                 self.log(f"{Fore.RED}ERROR: Could not update successor at {self.successor.ip}:{self.successor.port}: {x}{Style.RESET_ALL}")
+
 
         self.log("Closing socket...")
         self.server_socket.close()

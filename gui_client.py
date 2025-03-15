@@ -13,7 +13,7 @@ import time
 import matplotlib.pyplot as plt
 import subprocess
 
-from chord_network import BOOTSTRAP_IP
+USER = "ubuntu"
 
 plt.style.use("dark_background")
 
@@ -60,6 +60,7 @@ import socket
 BOOTSTRAP_IP = '127.0.0.1'
 BOOTSTRAP_PORT = 5000
 
+
 def ssh_run_node(vm_number, ip, port, is_bootstrap=False,
                  replication_factor=3, consistency="chain",
                  bootstrap_ip=BOOTSTRAP_IP, bootstrap_port=BOOTSTRAP_PORT):
@@ -67,20 +68,31 @@ def ssh_run_node(vm_number, ip, port, is_bootstrap=False,
     print(f"[INFO] Starting node: IP={ip}, Port={port}, VM={vm_number}, Bootstrap={is_bootstrap}")
 
     # Ensure absolute path to node.py
-    node_path = os.path.expanduser("~/conchord/node.py") if int(vm_number) > 0 else "./node.py"
-    log_path = os.path.expanduser(f"~/conchord/logs/node_{port}.log") if int(vm_number) > 0 else f"./logs/node_{port}.log"
+    node_path = os.path.expanduser(f"/home/{USER}/conchord/node.py") if int(vm_number) > 0 else "./node.py"
+    log_path = os.path.expanduser(f"/home/{USER}/conchord/logs/node_{port}.log") if int(vm_number) > 0 else f"./logs/node_{port}.log"
 
     # Ensure logs directory exists
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
     # Construct the correct command
     if is_bootstrap:
-        command = f"nohup python3 {node_path} --ip {ip} --port {port} --bootstrap --replication_factor {replication_factor} --consistency {consistency} > {log_path} 2>&1 &"
+        command = (
+            f"export PATH=$PATH:/usr/bin && "
+            f"nohup python3 {node_path} --ip {ip} --port {port} --bootstrap "
+            f"--replication_factor {replication_factor} --consistency {consistency} "
+            f"> {log_path} 2>&1 &"
+        )
     else:
         if bootstrap_ip is None or bootstrap_port is None:
             print(f"[ERROR] Non-bootstrap nodes require bootstrap_ip and bootstrap_port.")
             return f"Error: Missing bootstrap IP/port for non-bootstrap node."
-        command = f"nohup python3 {node_path} --ip {ip} --port {port} --bootstrap_ip {bootstrap_ip} --bootstrap_port {bootstrap_port} > {log_path} 2>&1 &"
+
+        command = (
+            f"export PATH=$PATH:/usr/bin && "
+            f"nohup python3 {node_path} --ip {ip} --port {port} "
+            f"--bootstrap_ip {bootstrap_ip} --bootstrap_port {bootstrap_port} "
+            f"> {log_path} 2>&1 &"
+        )
 
     # Decide whether to run locally or via SSH
     if int(vm_number) < 0:
@@ -89,7 +101,10 @@ def ssh_run_node(vm_number, ip, port, is_bootstrap=False,
     else:
         vm_alias = f"team_2-vm{vm_number}"
         print(f"[INFO] Running remotely on {vm_alias} via SSH.")
-        shell_command = f"ssh {vm_alias} '/bin/bash -c \"{command}\"'"
+        shell_command = (
+            f"ssh -i /home/{USER}/.ssh/team_key.pem {vm_alias} "
+            f"'/bin/bash -c \"{command}\"'"
+        )
 
     print(f"[DEBUG] Executing command: {shell_command}")
 
@@ -393,7 +408,7 @@ if selected == "Operations":
                 st.error("Please enter a key.")
 
         if st.button('Query ☆'):
-            command = 'query ☆'
+            command = 'query *'
             response = send_command(command)
 
             if not response.strip():

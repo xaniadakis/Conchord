@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Set the number of nodes per VM (default is 1 if not provided)
-NODES_PER_VM=${1:-1}
+NODES_PER_VM=${1:-2}
 REPLICATION_FACTOR=${2:-3}  # Default replication factor is 3
 CONSISTENCY_TYPE=${3:-chain}  # Default consistency type is 'chain'
 
