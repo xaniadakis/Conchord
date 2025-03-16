@@ -463,6 +463,9 @@ if selected == "Operations":
         st.write("- **delete** `<key>` - Remove a key-value pair.")
         st.write("- **help** - Show available commands.")
 
+        #reset action after execution
+        st.session_state["action"] = None
+
     # ---- BATCH INSERT ACTION ----
     if st.session_state.get("action") == "batch_insert":
         st.markdown("<h3>Batch Insert</h3>", unsafe_allow_html=True)
@@ -496,9 +499,9 @@ if selected == "Operations":
                 """,
                 unsafe_allow_html=True
             )
-
-    #reset action state
-    st.session_state["action"] = None    
+        
+        #reset action after execution
+        st.session_state["action"] = None
 
     # ---- RESET CONFIGURATION ACTION ----
     if st.session_state.get("action") == "reset_config":
