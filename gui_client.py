@@ -497,6 +497,9 @@ if selected == "Operations":
                 unsafe_allow_html=True
             )
 
+    #reset action state
+    st.session_state["action"] = None    
+
     # ---- RESET CONFIGURATION ACTION ----
     if st.session_state.get("action") == "reset_config":
         st.markdown("<h3>Reset Configuration</h3>", unsafe_allow_html=True)
