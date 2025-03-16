@@ -6,6 +6,7 @@ import argparse
 from colorama import Fore, Style, init
 import signal
 import os
+import copy
 
 # Initialize colorama (ensures Windows compatibility)
 init(autoreset=True)
@@ -327,22 +328,21 @@ class Node:
                                      if value["hop"] > 0}
                     self.log(f"Found {len(replica_transfer_data)} replicas to transfer.")
 
-                    combined_transfer_data = primary_transfer_data.copy()
-                    combined_transfer_data.update(replica_transfer_data)
+                    combined_transfer_data = copy.deepcopy(primary_transfer_data)
+                    combined_transfer_data.update(copy.deepcopy(replica_transfer_data))
                     self.log(f"Total keys to transfer (primary + replicas): {len(combined_transfer_data)}")
-
                     # Delete keys where hop > replication_factor - 1
                     old_data_size = len(self.data)
                     self.data = {k: v for k, v in self.data.items()
-                                 if not (k in combined_transfer_data and v["hop"] > self.replication_factor - 1)}
+                                 if not (k in combined_transfer_data and v["hop"] >= self.replication_factor - 1)}
                     new_data_size = len(self.data)
-                    self.log(f"Deleted {old_data_size - new_data_size} keys (hop > {self.replication_factor - 1}). "
+                    self.log(f"Deleted {old_data_size - new_data_size} keys (hop >= {self.replication_factor - 1})."
                              f"Now have {new_data_size} keys.")
-
-                    # # Increment hop for all keys that we sent to the predecessor
-                    # for key in combined_transfer_data:
-                    #     if key in self.data:
-                    #         self.data[key]["hop"] += 1  # Increment hop count
+                    
+                    # Increment hop for all of the keys of the successor that we send to the predecessor(joint node)
+                    for key in combined_transfer_data:
+                         if key in self.data:
+                             self.data[key]["hop"] += 1  # Increment hop count
 
                     # notify successors to increment hop on those keys too,
                     # and delete the ones that surpass the replication factor.
