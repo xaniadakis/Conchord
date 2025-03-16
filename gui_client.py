@@ -194,7 +194,6 @@ def fetch_data_from_node(node_id):
     try:
         command = f'get_data {node_id}'
         response = send_command(command)  # Send request to the node
-        print(response)
         if not response.strip():
             return {"error": "Empty response from node"}
 

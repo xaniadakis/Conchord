@@ -116,7 +116,7 @@ class Node:
                         if len(chunk) < 4096:
                             break
                 except socket.timeout:
-                    print("[ERROR] Receiving data timed out after 2 seconds.")
+                    self.log("[ERROR] Receiving data timed out after 2 seconds.")
 
                 self.log(f"I received {len(received_data)} bytes for transfer_keys.")
 
@@ -236,12 +236,12 @@ class Node:
             buffer = []
             try:
                 while True:
-                    chunk = client.recv(4096).decode()
+                    chunk = client.recv(1024*10).decode()
                     # No more data, stop reading
                     if not chunk:
                         break
                     buffer.append(chunk)
-                    if len(chunk) < 4096:
+                    if len(chunk) < 1024*10:
                         break
             except socket.timeout:
                 print("[ERROR] Receiving data timed out after 2 seconds.")
@@ -276,11 +276,11 @@ class Node:
                     self.log(f"get_data {request_node_id}")
                     if str(self.node_id)[-4:] == request_node_id or str(self.node_id) == request_node_id:
                         response = json.dumps({"node_id": str(self.node_id), "data": self.data}, indent=4)
-                        self.log(f"returning data {str(self.node_id)[-4:]}: {response}")
+                        self.log(f"returning data {str(self.node_id)[-4:]}")
                     else:
                         self.log(f"forwarding data to {self.successor.node_id}")
                         response = self.forward_request("get_data", request_node_id)
-                        self.log(f"received response from {str(self.successor.node_id)[-4:]} : {response}")
+                        self.log(f"received response from {str(self.successor.node_id)[-4:]}")
             elif command == "find_successor":
                 node_id = int(parts[1])
                 successor = self.find_successor(node_id)
@@ -338,7 +338,7 @@ class Node:
                     new_data_size = len(self.data)
                     self.log(f"Deleted {old_data_size - new_data_size} keys (hop >= {self.replication_factor - 1})."
                              f"Now have {new_data_size} keys.")
-                    
+
                     # Increment hop for all of the keys of the successor that we send to the predecessor(joint node)
                     for key in combined_transfer_data:
                          if key in self.data:
@@ -401,45 +401,56 @@ class Node:
                 else:
                     response = "ERROR: Malformed increment_hop command"
             elif command == "receive_keys":
-                response = "ACK"
-                # try:
-                #     keys_data = json.loads(" ".join(parts[1:]))
-                #     # self.log(f"DATA: {keys_data}")
-                #     transferred_count = 0
-                #     transfer_data = {}
-                #
-                #     for key, value in keys_data.items():
-                #         if key in self.data:
-                #             # If the key already exists, decrement the hop count
-                #             self.data[key]["hop"] = self.data[key]["hop"] - 1
-                #             transfer_data[key] = self.data[key]
-                #         else:
-                #             # Insert the key with the received hop count and value
-                #             self.data[key] = {"value": value["value"], "hop": value["hop"]}
-                #             transferred_count += 1
-                #
-                #     self.log(f"Received {keys_data} and stored {transferred_count} new keys after node departure.")
-                #
-                #     # Propagate the key transfer process to the next successor
-                #     if len(transfer_data) > 0:
-                #         self.log(f"Will propagate {len(transfer_data)} changes to {self.successor.node_id}")
-                #         if self.successor.node_id != self.node_id:
-                #             try:
-                #                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-                #                     client.connect((self.successor.ip, self.successor.port))
-                #                     client.sendall(f"receive_keys {json.dumps(transfer_data)}".encode())
-                #                     ack = client.recv(1024).decode()
-                #                     if ack == "ACK":
-                #                         self.log(f"Successor {self.successor.node_id} acknowledged key transfer.")
-                #                     else:
-                #                         self.log(
-                #                             f"[ERROR] Successor {self.successor.node_id} did not acknowledge key transfer: {ack}")
-                #             except Exception as e:
-                #                 self.log(
-                #                     f"[ERROR] Could not propagate keys to successor {self.successor.node_id}: {e}")
-                #     response = "ACK"
-                # except json.JSONDecodeError:
-                #     response = "ERROR: Invalid key transfer data format"
+                try:
+                    keys_data = json.loads(" ".join(parts[1:]))
+                    keys_data = {key.strip().strip('"').strip(): value for key, value in keys_data.items()}
+                    # self.log(f"DATA: {keys_data}")
+                    alter_count = 0
+                    insert_count = 0
+                    transfer_data = {}
+                    # self.log(f"######################################################\nKEYS DATA: {keys_data}")
+
+                    def normalize_key(key):
+                        return key.strip().strip('"').strip("'")
+
+                    # Create a mapping of normalized keys to original keys in self.data
+                    normalized_self_data = {normalize_key(k): k for k in self.data}
+
+                    for key, value in keys_data.items():
+                        norm_key = normalize_key(key)  # Normalize key from keys_data
+
+                        if norm_key in normalized_self_data:
+                            original_key = normalized_self_data[norm_key]  # Get actual key from self.data
+                            # If the key already exists, decrement the hop count
+                            self.data[original_key]["hop"] -= 1
+                            transfer_data[original_key] = self.data[original_key]
+                            alter_count += 1
+                        else:
+                            # Insert the key with the received hop count and value using original format
+                            self.data[key] = {"value": value["value"], "hop": value["hop"]}
+                            insert_count += 1
+
+                    self.log(f"Received {len(keys_data)}, inserted {insert_count} new keys & altered {alter_count} keys after node "
+                             f"departure from {str(self.predecessor.node_id)[-4:]}.")
+
+                    # Propagate the key transfer process to the next successor
+                    if len(transfer_data) > 0 and alter_count+insert_count>0:
+                        if self.successor.node_id != self.node_id:
+                            self.log(f"Will propagate {len(transfer_data)} changes to {str(self.successor.node_id)[-4:]}")
+                            ack = self.forward_request("receive_keys", json.dumps(transfer_data))
+                            if ack == "ACK":
+                                self.log(f"Successor {str(self.successor.node_id)[-4:]} acknowledged key transfer.")
+                                response = "ACK"
+                            else:
+                                self.log(f"[ERROR] Successor {str(self.successor.node_id)[-4:]} did not acknowledge key transfer: {ack}")
+                                response = "ERROR"
+                        else:
+                            response = "ACK"
+                    else:
+                        response = "ACK"
+
+                except json.JSONDecodeError:
+                    response = "ERROR: Invalid key transfer data format"
 
             elif command == "insert":
                 key, value = parts[1], parts[2]
@@ -478,12 +489,23 @@ class Node:
             else:
                 response = f"Invalid command: {", ".join(parts)}"
 
-            client.send(response.encode())
+            # Ensure the socket is still valid before sending response
+            if client.fileno() != -1:
+                client.send(response.encode())
+            else:
+                self.log(f"Socket is not open anymore. Client cannot send response!")
         except Exception as e:
             self.log(f"{Fore.RED}ERROR: Exception in handle_request: {e}{Style.RESET_ALL}")
-            client.send("ERROR: Internal server error".encode())
+            if client.fileno() != -1:  # Prevent sending if socket is closed
+                try:
+                    client.send("ERROR: Internal server error".encode())
+                except OSError:
+                    pass  # Ignore if the socket is already closed
         finally:
-            client.close()
+            try:
+                client.close()  # Ensure socket is closed properly
+            except OSError:
+                pass
 
     def insert(self, key, value, replica_count=0):
         hashed_key = hash_key(key)
@@ -684,8 +706,8 @@ class Node:
         if self.successor.node_id != self.node_id:
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                    client.settimeout(2)  # Ensure we don't block forever
                     client.connect((self.successor.ip, self.successor.port))
-                    self.log(f"DATA: {self.data}")
                     client.sendall(f"receive_keys {json.dumps(self.data)}".encode())
                     ack = client.recv(1024).decode()
                     if ack != "ACK":
@@ -699,6 +721,7 @@ class Node:
         if self.predecessor.node_id != self.node_id:
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                    client.settimeout(2)
                     client.connect((self.predecessor.ip, self.predecessor.port))
                     client.sendall(f"update_successor {self.successor.ip} {self.successor.port}".encode())
                     ack = client.recv(1024).decode()
@@ -713,6 +736,7 @@ class Node:
         if self.successor.node_id != self.node_id:
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                    client.settimeout(2)
                     client.connect((self.successor.ip, self.successor.port))
                     client.sendall(f"update_predecessor {self.predecessor.ip} {self.predecessor.port}".encode())
                     ack = client.recv(1024).decode()
@@ -722,7 +746,6 @@ class Node:
                         self.log(f"{Fore.GREEN}Successor {str(self.successor.node_id)[-4:]} did acknowledge predecessor update!{Style.RESET_ALL}")
             except Exception as x:
                 self.log(f"{Fore.RED}ERROR: Could not update successor at {self.successor.ip}:{self.successor.port}: {x}{Style.RESET_ALL}")
-
 
         self.log("Closing socket...")
         self.server_socket.close()
