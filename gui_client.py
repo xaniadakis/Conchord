@@ -1,25 +1,17 @@
 import pandas as pd
 import streamlit as st
-from numpy.f2py.auxfuncs import throw_error
 from streamlit_option_menu import option_menu
 import datetime
-import socket
-import matplotlib.pyplot as plt
 import networkx as nx
 import json
-from tqdm import tqdm  # You may need to install this with pip if not installed
-import os
-import time
+from tqdm import tqdm
 import matplotlib.pyplot as plt
-import subprocess
-
-USER = "ubuntu"
+import os
+import socket
 
 plt.style.use("dark_background")
 
-# ---- PAGE CONFIG ----
 st.set_page_config(page_title="ConChord", page_icon="🎼", layout="wide")
-# ---- GLOBAL CSS FOR FULL-WIDTH BUTTONS ----
 st.markdown(
     """
     <style>
@@ -31,7 +23,6 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# ---- SESSION STATE INITIALIZATION ----
 if "action" not in st.session_state:
     st.session_state["action"] = None
 if "key" not in st.session_state:
@@ -43,7 +34,6 @@ if "query_key" not in st.session_state:
 if "delete_key" not in st.session_state:
     st.session_state["delete_key"] = ""
 
-# Global dictionary to store node information
 st.session_state["node_info"] = {}
 VM_MAPPING = {
     "10.0.9.91": 1,
@@ -52,103 +42,142 @@ VM_MAPPING = {
     "10.0.9.31": 4,
     "10.0.9.160": 5
 }
-import subprocess
-import os
-import time
-import socket
+
 
 BOOTSTRAP_IP = '127.0.0.1'
+PUBLIC_BOOTSTRAP_IP = '10.0.9.91'
 BOOTSTRAP_PORT = 5000
+USER = "ubuntu"
 
+# def ssh_run_node(vm_number, ip, port, is_bootstrap=False,
+#                  replication_factor=3, consistency="chain",
+#                  bootstrap_ip=PUBLIC_BOOTSTRAP_IP, bootstrap_port=BOOTSTRAP_PORT):
+#     print(f"Starting node: IP={ip}, Port={port}, VM={vm_number}, Bootstrap={is_bootstrap}")
+#
+#     node_path = "/home/ubuntu/conchord/node.py"
+#     log_path = "/home/ubuntu/conchord/log"
+#
+#     os.makedirs(os.path.dirname(log_path), exist_ok=True)
+#
+#     if is_bootstrap:
+#         command = (
+#             f"export PATH=/usr/bin:/usr/local/bin && "
+#             f"nohup python3 {node_path} --ip {ip} --port {port} --bootstrap "
+#             f"--replication_factor {replication_factor} --consistency {consistency} "
+#             f"> {log_path} 2>&1 & disown"
+#         )
+#     else:
+#         if bootstrap_ip is None or bootstrap_port is None:
+#             print(f"Non-bootstrap nodes require bootstrap_ip and bootstrap_port.")
+#             return f"Error: Missing bootstrap IP/port for non-bootstrap node."
+#
+#         command = (
+#             f"export PATH=/usr/bin:/usr/local/bin && "
+#             f"nohup python3 {node_path} --ip {ip} --port {port} "
+#             f"--bootstrap_ip {PUBLIC_BOOTSTRAP_IP} --bootstrap_port {bootstrap_port} "
+#             f"> {log_path} 2>&1 & disown"
+#         )
+#
+#     ssh_key_path = "/home/ubuntu/.ssh/team_key.pem"
+#     vm_alias = f"team_2-vm{vm_number}"
+#
+#     shell_command = (
+#         f"sudo -u ubuntu -- /usr/bin/ssh -T -i {ssh_key_path} -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "
+#         f"{vm_alias} '/usr/bin/bash -c \"{command}\"'"
+#     )
+#
+#     print(f"Executing command: {shell_command}")
+#
+#     try:
+#         result = subprocess.run(shell_command, shell=True, executable="/bin/bash", capture_output=True, text=True)
+#
+#         if result.returncode == 0:
+#             print(f"SSH Output:\n{result.stdout.strip()}")  # Print whoami output
+#             print(f"Node process started, checking if it's running...")
+#
+#             for i in range(10):
+#                 time.sleep(1)
+#                 if is_node_running(ip, port):
+#                     print(f"Node is running on {ip}:{port} ✅")
+#                     return f"Success: Node started and running on {ip}:{port}"
+#                 print(f"Waiting for node to start... ({i+1}/10)")
+#
+#             print(f"Node process started but not responding on {ip}:{port}.")
+#             return f"Error: Node process started but not responding."
+#
+#         else:
+#             print(f"Node failed to start. Return code: {result.returncode}")
+#             print(f"{result.stderr.strip()}")
+#             return f"Error: Node failed to start. Return code: {result.returncode}, Error: {result.stderr.strip()}"
+#
+#     except Exception as e:
+#         print(f"SSH Connection Error: {e}")
+#         return f"SSH Connection Error: {e}"
+#
+
+import subprocess
+import time
+import streamlit as st
 
 def ssh_run_node(vm_number, ip, port, is_bootstrap=False,
                  replication_factor=3, consistency="chain",
-                 bootstrap_ip=BOOTSTRAP_IP, bootstrap_port=BOOTSTRAP_PORT):
-    """Start a new node (locally or remotely via SSH) and confirm when it's running."""
-    print(f"[INFO] Starting node: IP={ip}, Port={port}, VM={vm_number}, Bootstrap={is_bootstrap}")
+                 bootstrap_ip=PUBLIC_BOOTSTRAP_IP, bootstrap_port=BOOTSTRAP_PORT):
+    print(f"Starting node: IP={ip}, Port={port}, VM={vm_number}, Bootstrap={is_bootstrap}...")
 
-    # Ensure absolute path to node.py
-    node_path = os.path.expanduser(f"/home/{USER}/conchord/node.py") if int(vm_number) > 0 else "./node.py"
-    log_path = os.path.expanduser(f"/home/{USER}/conchord/logs/node_{port}.log") if int(vm_number) > 0 else f"./logs/node_{port}.log"
+    node_path = "/home/ubuntu/conchord/node.py"
+    log_path = f"/home/ubuntu/conchord/node{port}.log"
 
-    # Ensure logs directory exists
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
-    # Construct the correct command
     if is_bootstrap:
         command = (
-            f"export PATH=$PATH:/usr/bin && "
+            f"export PATH=/usr/bin:/usr/local/bin && "
             f"nohup python3 {node_path} --ip {ip} --port {port} --bootstrap "
             f"--replication_factor {replication_factor} --consistency {consistency} "
-            f"> {log_path} 2>&1 &"
+            f"> {log_path} 2>&1 & disown; exit"
         )
     else:
         if bootstrap_ip is None or bootstrap_port is None:
-            print(f"[ERROR] Non-bootstrap nodes require bootstrap_ip and bootstrap_port.")
-            return f"Error: Missing bootstrap IP/port for non-bootstrap node."
+            print(f"Non-bootstrap nodes require bootstrap_ip and bootstrap_port.")
+            return f"Error: Non-bootstrap nodes require bootstrap_ip and bootstrap_port."
 
         command = (
-            f"export PATH=$PATH:/usr/bin && "
+            f"export PATH=/usr/bin:/usr/local/bin && "
             f"nohup python3 {node_path} --ip {ip} --port {port} "
-            f"--bootstrap_ip {bootstrap_ip} --bootstrap_port {bootstrap_port} "
-            f"> {log_path} 2>&1 &"
+            f"--bootstrap_ip {PUBLIC_BOOTSTRAP_IP} --bootstrap_port {bootstrap_port} "
+            f"> {log_path} 2>&1 & disown; exit"
         )
 
-    # Decide whether to run locally or via SSH
-    if int(vm_number) < 0:
-        print(f"[INFO] Running locally on this machine.")
-        shell_command = f"/bin/bash -c '{command}'"
-    else:
-        vm_alias = f"team_2-vm{vm_number}"
-        print(f"[INFO] Running remotely on {vm_alias} via SSH.")
-        shell_command = (
-            f"ssh -i /home/{USER}/.ssh/team_key.pem {vm_alias} "
-            f"'/bin/bash -c \"{command}\"'"
-        )
+    ssh_key_path = "/home/ubuntu/.ssh/team_key.pem"
+    vm_alias = f"team_2-vm{vm_number}"
+
+    shell_command = (
+        f"sudo -u ubuntu -- /usr/bin/ssh -T -i {ssh_key_path} -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "
+        f"{vm_alias} '/usr/bin/bash -c \"{command}\"' </dev/null >/dev/null 2>&1 &"
+    )
 
     print(f"[DEBUG] Executing command: {shell_command}")
 
     try:
-        # Run command in background
-        result = subprocess.run(shell_command, shell=True, executable="/bin/bash", capture_output=True, text=True)
-
-        if result.returncode == 0:
-            print(f"[INFO] Node process started, checking if it's running...")
-
-            # Wait and check if the node is reachable
-            for i in range(10):
-                time.sleep(1)
-                if is_node_running(ip, port):
-                    print(f"[SUCCESS] Node is running on {ip}:{port} ✅")
-                    return f"Success: Node started and running on {ip}:{port}"
-                print(f"[INFO] Waiting for node to start... ({i+1}/10)")
-
-            print(f"[ERROR] Node process started but not responding on {ip}:{port}.")
-            return f"Error: Node process started but not responding."
-
-        else:
-            print(f"[ERROR] Node failed to start. Return code: {result.returncode}")
-            print(f"[STDERR] {result.stderr.strip()}")
-            return f"Error: Node failed to start. Return code: {result.returncode}, Error: {result.stderr.strip()}"
-
+        subprocess.Popen(shell_command, shell=True, executable="/bin/bash", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(4)
+        print("Refreshing app...")
+        st.rerun()
     except Exception as e:
-        print(f"[EXCEPTION] SSH Connection Error: {e}")
+        print(f"SSH Connection Error: {e}")
         return f"SSH Connection Error: {e}"
 
 def is_node_running(ip, port):
-    """Check if the node is listening on the given IP and port."""
     try:
         with socket.create_connection((ip, port), timeout=1):
             return True
     except (socket.timeout, ConnectionRefusedError):
         return False
 
-# ---- FUNCTION: SEND COMMAND TO CHORD NETWORK ----
 def send_command(command):
-    """Send a command to the bootstrap node and return the response."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-            client.connect((BOOTSTRAP_IP, BOOTSTRAP_PORT))  # Connect to bootstrap node
+            client.connect((BOOTSTRAP_IP, BOOTSTRAP_PORT))
             client.sendall(command.encode())
 
             response = []
@@ -158,22 +187,19 @@ def send_command(command):
                     break
                 response.append(chunk)
 
-            return "".join(response)  # Join response chunks
+            return "".join(response)
 
     except Exception as e:
         return f"Error: {e}"
 
-# ---- FUNCTION: FETCH OVERLAY DATA ----
 def fetch_nodes():
-    """Fetch the entire overlay from the bootstrap node."""
     try:
-        response = send_command("overlay")  # Send overlay request
+        response = send_command("overlay")
         if not response.strip():
             return {"error": "Empty response from network"}
 
-        nodes = json.loads(response)  # Parse JSON safely
+        nodes = json.loads(response)
         print(nodes)
-        # Store node details globally for later use (departing nodes)
         st.session_state["node_info"] = {
             str(node_id): {
                 "ip": details.get("ip"),
@@ -190,14 +216,13 @@ def fetch_nodes():
         return {"error": str(e)}
 
 def fetch_data_from_node(node_id):
-    """Fetch stored data from a specific node."""
     try:
         command = f'get_data {node_id}'
-        response = send_command(command)  # Send request to the node
+        response = send_command(command)
         if not response.strip():
             return {"error": "Empty response from node"}
 
-        node_data = json.loads(response)  # Parse JSON response
+        node_data = json.loads(response)
         return node_data
 
     except json.JSONDecodeError:
@@ -205,9 +230,7 @@ def fetch_data_from_node(node_id):
     except Exception as e:
         return {"error": str(e)}
 
-# ---- FUNCTION: VISUALIZE CHORD NETWORK ----
 def visualize_chord_ring():
-    """Draw the Chord ring with correct node connections and key counts above nodes."""
     nodes = fetch_nodes()
 
     if "error" in nodes:
@@ -221,23 +244,19 @@ def visualize_chord_ring():
     node_colors = {}
     text_colors = {}
 
-    # Ensure node IDs are always strings
     nodes = {str(node_id): details for node_id, details in nodes.items()}
 
-    # Explicitly add all nodes first
     for node_id, details in nodes.items():
         G.add_node(node_id)
-        labels[node_id] = f"{node_id[-4:]} | {str(details.get('port', '??'))[-2:]}"  # Short ID | Port
+        labels[node_id] = f"{node_id[-4:]} | {str(details.get('port', '??'))[-2:]}"
 
-        # Assign colors
         if details.get("is_bootstrap", False):
-            node_colors[node_id] = "#BE3144"  # Bootstrap node (Red)
+            node_colors[node_id] = "#BE3144"
             text_colors[node_id] = "white"
         else:
-            node_colors[node_id] = "lightblue"  # Normal nodes (Blue)
+            node_colors[node_id] = "lightblue"
             text_colors[node_id] = "black"
 
-    # Add edges
     for node_id, details in nodes.items():
         successor = str(details.get("successor"))
         if successor in nodes:
@@ -245,30 +264,26 @@ def visualize_chord_ring():
         else:
             st.warning(f"Node {node_id} has an unknown successor {successor}, skipping edge.")
 
-    # **Handle layout for 2 nodes** (avoids overlapping in `nx.circular_layout`)
     if len(G.nodes) == 2:
         pos = {
             list(G.nodes)[0]: (-1, 0),
             list(G.nodes)[1]: (1, 0)
         }
-        show_key_counts = False  # Don't show key counts for 2 nodes
+        show_key_counts = False
     else:
         pos = nx.circular_layout(G)
-        show_key_counts = True  # Show key counts normally
+        show_key_counts = True
 
     print("Nodes:", nodes)
     print("Edges:", list(G.edges))
 
-    # Draw nodes and edges
     nx.draw(G, pos, with_labels=False, node_size=800, node_color=[node_colors[n] for n in G.nodes],
             edge_color="gray", font_size=6, arrowsize=10, ax=ax)
 
-    # Draw labels with specific text colors
     for node, (x, y) in pos.items():
         ax.text(x, y, labels[node], fontsize=6, color=text_colors[node],
                 ha='center', va='center', bbox=dict(facecolor='none', edgecolor='none', pad=0))
 
-    # Show key counts **ONLY if more than 2 nodes**
     if show_key_counts:
         for node, (x, y) in pos.items():
             key_count = nodes[node].get("key_count", 0)
@@ -278,13 +293,10 @@ def visualize_chord_ring():
 
     st.pyplot(fig)
 
-
 def process_insert_directory(directory):
-    """Process a directory containing insert files after fetching network configuration."""
     if not os.path.exists(directory) or not os.path.isdir(directory):
-        return False, 0, None, 0  # Return failure, 0 time, and no config
+        return False, 0, None, 0
 
-    # Fetch network configuration
     config_response = send_command("get_network_config").strip()
 
     if ":" in config_response:
@@ -297,7 +309,7 @@ def process_insert_directory(directory):
 
     total_files = len(insert_files)
     if total_files == 0:
-        return False, 0, network_config, 0  # No files found
+        return False, 0, network_config, 0
 
     start_time = time.time()
 
@@ -306,7 +318,7 @@ def process_insert_directory(directory):
         filepath = os.path.join(directory, filename)
         try:
             with open(filepath, 'r', encoding='utf-8') as file:
-                value = filename.split('_')[1]  # Extract number part
+                value = filename.split('_')[1]
                 keys = [line.strip() for line in file if line.strip()]
 
                 for key in tqdm(keys, desc=f"  Inserting keys from {filename}", unit="key", leave=False, ncols=80):
@@ -315,12 +327,11 @@ def process_insert_directory(directory):
                     response = send_command(command)
 
         except Exception:
-            return False, 0, network_config, 0  # Error during processing
+            return False, 0, network_config, 0
 
     elapsed_time = time.time() - start_time
     return True, elapsed_time, network_config, key_counter
 
-# ---- SIDEBAR NAVIGATION ----
 with st.sidebar:
     selected = option_menu(
         menu_title="Navigation",
@@ -331,7 +342,6 @@ with st.sidebar:
     )
 
 
-# ---- DATABASE OPERATIONS PAGE ----
 if selected == "Operations":
     st.markdown("<h2 style='text-align: center;'>Operations</h2>", unsafe_allow_html=True)
 
@@ -357,7 +367,6 @@ if selected == "Operations":
         if st.button("Reset"):
             st.session_state["action"] = "reset_config"
 
-    # ---- INSERT ACTION ----
     if st.session_state["action"] == "insert":
         st.markdown("<h3>Insert Data</h3>", unsafe_allow_html=True)
 
@@ -382,7 +391,6 @@ if selected == "Operations":
             else:
                 st.error("Please enter both a key and a value.")
 
-    # ---- QUERY ACTION ----
     elif st.session_state["action"] == "query":
         st.markdown("<h3>Query Data</h3>", unsafe_allow_html=True)
         query_input = st.text_input("Enter Key to Query:", key="query_key")
@@ -390,6 +398,7 @@ if selected == "Operations":
         if st.button("Submit Query"):
             if query_input.strip():
                 command = f'query "{query_input}"'
+                print(f"Querying: {query_input}")
                 response = send_command(command)
 
                 st.markdown(
@@ -419,13 +428,10 @@ if selected == "Operations":
                         st.info("No stored data found.")
                     else:
                         formatted_data = [{"Key": k, "Value": v} for k, v in data.items()]
-                        st.table(formatted_data)  # Display as a structured table
-                        # Use st.dataframe for full-width display
-                        # st.dataframe(formatted_data, use_container_width=True)
+                        st.table(formatted_data)
                 except json.JSONDecodeError:
                     st.error("Invalid JSON format in response.")
 
-    # ---- DELETE ACTION ----
     elif st.session_state["action"] == "delete":
         st.markdown("<h3>Delete Data</h3>", unsafe_allow_html=True)
 
@@ -454,7 +460,6 @@ if selected == "Operations":
                 else:
                     st.error("Please enter a key.")
 
-    # ---- HELP ACTION ----
     elif st.session_state["action"] == "help":
         st.markdown("<h3>Help</h3>", unsafe_allow_html=True)
         st.info("Available Commands:")
@@ -466,12 +471,11 @@ if selected == "Operations":
         #reset action after execution
         st.session_state["action"] = None
 
-    # ---- BATCH INSERT ACTION ----
     if st.session_state.get("action") == "batch_insert":
         st.markdown("<h3>Batch Insert</h3>", unsafe_allow_html=True)
 
         directory = "insert"
-        success, elapsed_time, network_config, key_counter = process_insert_directory(directory)  # Capture time & config
+        success, elapsed_time, network_config, key_counter = process_insert_directory(directory)
 
         if success:
             st.markdown(
@@ -503,7 +507,6 @@ if selected == "Operations":
         #reset action after execution
         st.session_state["action"] = None
 
-    # ---- RESET CONFIGURATION ACTION ----
     if st.session_state.get("action") == "reset_config":
         st.markdown("<h3>Reset Configuration</h3>", unsafe_allow_html=True)
 
@@ -534,25 +537,23 @@ if selected == "Operations":
                 )
             else:
                 st.error("Please enter a valid numeric replication factor.")
-# ---- OVERLAY PAGE ----
+
 elif selected == "Overlay":
     st.markdown("<h2 style='text-align: center;'>Overlay</h2>", unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns([1, 4, 1])  # Center column takes more space
+    col1, col2, col3 = st.columns([1, 4, 1])
 
     with col2:
-        # REFRESH BUTTON
         col24, col25, col26 = st.columns([4, 1, 4])
         with col25:
             if st.button("Refresh"):
                 st.rerun()
 
-        visualize_chord_ring()  # Display the network graph
+        visualize_chord_ring()
 
         st.markdown("### Join the Network")
 
         col27, col28, col29, col299 = st.columns([4, 2, 2, 2])
-        # JOIN SECTION
         with col27:
             join_ip = st.text_input("Enter IP Address:", key="join_ip")
             is_bootstrap = st.checkbox("Bootstrap", key="is_bootstrap", value=False)
@@ -601,7 +602,6 @@ elif selected == "Overlay":
                 else:
                     st.error("Please enter IP address, Port, and VM Number.")
 
-        # DEPART SECTION
         st.markdown("### Depart the Network")
         col210, col211 = st.columns([4, 1])
         with col210:
@@ -622,7 +622,7 @@ elif selected == "Overlay":
             )
             if st.button("Depart"):
                 if depart_node_id.strip():
-                    # Search for the full node ID based on the last 4 digits
+                    #search for the full node ID based on the last 4 digits
                     matched_nodes = [
                         full_id for full_id in st.session_state["node_info"]
                         if full_id.endswith(depart_node_id)
@@ -641,24 +641,23 @@ elif selected == "Overlay":
                             ip = node_info["ip"]
                             port = node_info["port"]
                             vm_alias = f"team_2-vm{vm_number}"
-                            kill_command = f"kill -2 $(lsof -t -i :{port})"
+                            kill_command = f"sudo -u ubuntu -- /usr/bin/ssh -T -i /home/ubuntu/.ssh/team_key.pem " \
+                                           f"-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no {vm_alias} " \
+                                           f"'/usr/bin/bash -c \"kill -2 $(lsof -t -i :{port}) || echo Node not running; exit\"' " \
+                                           f"</dev/null >/dev/null 2>&1 &"
 
                             if vm_number == -1:
                                 subprocess.run(kill_command, shell=True)
-                                st.success(f"Node {depart_node_id} departed successfully from local machine.")
                             else:
-                                # SSH into the correct VM and kill the process
-                                ssh_command = f"ssh {vm_alias} '{kill_command}'"
-                                subprocess.run(ssh_command, shell=True)
-                                st.success(f"Node {depart_node_id} departed successfully from {vm_alias}.")
-
+                                subprocess.Popen(kill_command, shell=True, executable="/bin/bash",
+                                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            time.sleep(4)
                             st.rerun()
                         else:
                             st.error("Node ID not found in stored overlay.")
                 else:
                     st.error("Please enter a valid Node ID.")
 
-        # Fetch Data from a Node
         st.markdown("### Fetch Data from a Node")
         selected_node = st.text_input("Enter Node ID to Fetch Data:", key="fetch_node_id")
 
@@ -676,7 +675,7 @@ elif selected == "Overlay":
                         st.table(formatted_data)
             else:
                 st.warning("Please enter a valid Node ID.")
-# ---- EXPERIMENTS ----
+
 if selected == "Experiments":
     st.markdown("<h2 style='text-align: center;'>Experiments</h2>", unsafe_allow_html=True)
 
@@ -684,7 +683,6 @@ if selected == "Experiments":
 
 
     def process_insert_directory(directory):
-        """Process batch insert from directory files."""
         if not os.path.exists(directory) or not os.path.isdir(directory):
             return False, 0, None, 0
 
@@ -721,7 +719,6 @@ if selected == "Experiments":
 
 
     def process_query_directory(directory):
-        """Process batch queries from directory files."""
         if not os.path.exists(directory) or not os.path.isdir(directory):
             return False, 0, None, 0
 
@@ -757,7 +754,6 @@ if selected == "Experiments":
 
 
     def process_request_directory(request_directory):
-        """Process insert and query requests from all files in a directory."""
         if not os.path.exists(request_directory) or not os.path.isdir(request_directory):
             return False, "Directory not found", None
 
@@ -795,7 +791,6 @@ if selected == "Experiments":
 
 
     def reset_config(replication_factor, consistency_type):
-        """Reset the network configuration."""
         if not replication_factor.isdigit():
             return "Error: Replication factor must be a number."
         command = f"reset_config {replication_factor} {consistency_type}"
@@ -827,13 +822,12 @@ if selected == "Experiments":
                 x_labels = []
 
                 with tqdm(total=len(settings), desc="Running Experiment", unit="config") as pbar:
-                    progress_bar = st.progress(0)  # Initialize progress bar
+                    progress_bar = st.progress(0)
                     total_steps = len(settings)
 
                     for i, (repl_factor, consistency) in enumerate(settings):
-                        progress_bar.progress(int((i / total_steps) * 100))  # Update progress
+                        progress_bar.progress(int((i / total_steps) * 100))
 
-                    # for repl_factor, consistency in settings:
                         reset_status = reset_config(repl_factor, consistency)
                         if reset_status != "OK":
                             progress_bar.progress(100)
@@ -855,7 +849,7 @@ if selected == "Experiments":
                             x_labels.append(f"{repl_factor}")
 
                         pbar.update(1)
-                        progress_bar.progress(int(((i + 1) / total_steps) * 100))  # Update progress
+                        progress_bar.progress(int(((i + 1) / total_steps) * 100))
                         tqdm.write("Let the Conchord rest for 1 second.")
                         time.sleep(1)
                     progress_bar.progress(100)
@@ -872,20 +866,20 @@ if selected == "Experiments":
                 with col2:
                     fig, ax = plt.subplots(figsize=(8, 5))
 
-                    chain_color = "#80C7E0"  # Muted blue
-                    eventual_color = "#B490C0"  # Soft purple
+                    chain_color = "#80C7E0"
+                    eventual_color = "#B490C0"
 
                     ax.plot(x_labels[:3], chain_throughput, marker='o', linestyle='-', color=chain_color,
                             markersize=7, linewidth=2, alpha=0.8, label="Chain")
                     ax.plot(x_labels[3:], eventual_throughput, marker='s', linestyle='-', color=eventual_color,
                             markersize=7, linewidth=2, alpha=0.8, label="Eventual")
                     ax.set_xlabel("Replication Factor", fontsize=11, fontweight='medium',
-                                  color="#E0E0E0")  # Soft gray-white
+                                  color="#E0E0E0")
                     ax.set_ylabel("Throughput (Keys/sec)", fontsize=11, fontweight='medium', color="#E0E0E0")
                     ax.set_title("Write Throughput: Chain vs. Eventual Consistency", fontsize=13, fontweight='medium',
                                  color="#F5F5F5")
                     ax.grid(True, linestyle="--", alpha=0.3, color="gray")
-                    ax.spines["left"].set_color("#A0A0A0")  # Light gray for softer contrast
+                    ax.spines["left"].set_color("#A0A0A0")
                     ax.spines["bottom"].set_color("#A0A0A0")
                     ax.spines["right"].set_color("none")
                     ax.spines["top"].set_color("none")
@@ -917,13 +911,12 @@ if selected == "Experiments":
                 x_labels = []
 
                 with tqdm(total=len(settings), desc="Running Experiment", unit="config") as pbar:
-                    progress_bar = st.progress(0)  # Initialize progress bar
+                    progress_bar = st.progress(0)
                     total_steps = len(settings)
 
                     for i, (repl_factor, consistency) in enumerate(settings):
-                        progress_bar.progress(int((i / total_steps) * 100))  # Update progress
+                        progress_bar.progress(int((i / total_steps) * 100))
 
-                    # for repl_factor, consistency in settings:
                         reset_status = reset_config(repl_factor, consistency)
                         if reset_status != "OK":
                             progress_bar.progress(100)
@@ -951,7 +944,7 @@ if selected == "Experiments":
                             x_labels.append(f"{repl_factor}")
 
                         pbar.update(1)
-                        progress_bar.progress(int(((i + 1) / total_steps) * 100))  # Update progress
+                        progress_bar.progress(int(((i + 1) / total_steps) * 100))
                         tqdm.write("Let the Conchord rest for 1 second.")
                         time.sleep(1)
                     progress_bar.progress(100)
@@ -969,20 +962,20 @@ if selected == "Experiments":
                 with col2:
                     fig, ax = plt.subplots(figsize=(8, 5))
 
-                    chain_color = "#80C7E0"  # Muted blue
-                    eventual_color = "#B490C0"  # Soft purple
+                    chain_color = "#80C7E0"
+                    eventual_color = "#B490C0"
 
                     ax.plot(x_labels[:3], chain_throughput, marker='o', linestyle='-', color=chain_color,
                             markersize=7, linewidth=2, alpha=0.8, label="Chain")
                     ax.plot(x_labels[3:], eventual_throughput, marker='s', linestyle='-', color=eventual_color,
                             markersize=7, linewidth=2, alpha=0.8, label="Eventual")
                     ax.set_xlabel("Replication Factor", fontsize=11, fontweight='medium',
-                                  color="#E0E0E0")  # Soft gray-white
+                                  color="#E0E0E0")
                     ax.set_ylabel("Read Throughput (Queries/sec)", fontsize=11, fontweight='medium', color="#E0E0E0")
                     ax.set_title("Read Throughput: Chain vs. Eventual Consistency", fontsize=13, fontweight='medium',
                                  color="#F5F5F5")
                     ax.grid(True, linestyle="--", alpha=0.3, color="gray")
-                    ax.spines["left"].set_color("#A0A0A0")  # Light gray for softer contrast
+                    ax.spines["left"].set_color("#A0A0A0")
                     ax.spines["bottom"].set_color("#A0A0A0")
                     ax.spines["right"].set_color("none")
                     ax.spines["top"].set_color("none")
@@ -1004,13 +997,12 @@ if selected == "Experiments":
                 eventual_results = []
 
                 with tqdm(total=len(settings), desc="Running Freshness Experiment", unit="config") as pbar:
-                    progress_bar = st.progress(0)  # Initialize progress bar
+                    progress_bar = st.progress(0)
                     total_steps = len(settings)
 
                     for i, (repl_factor, consistency) in enumerate(settings):
-                        progress_bar.progress(int((i / total_steps) * 100))  # Update progress
+                        progress_bar.progress(int((i / total_steps) * 100))
 
-                    # for repl_factor, consistency in settings:
                         reset_status = reset_config(repl_factor, consistency)
                         if reset_status != "OK":
                             progress_bar.progress(100)
@@ -1031,7 +1023,7 @@ if selected == "Experiments":
                                 eventual_results.append(["eventual", key, value])
 
                         pbar.update(1)
-                        progress_bar.progress(int(((i + 1) / total_steps) * 100))  # Update progress
+                        progress_bar.progress(int(((i + 1) / total_steps) * 100))
                         tqdm.write("Let the Conchord rest for 1 second.")
                         time.sleep(1)
                     progress_bar.progress(100)
@@ -1044,17 +1036,17 @@ if selected == "Experiments":
                 col1, col2 = st.columns([1,1])
                 with col1:
                     df_chain_styled = df_chain.style.set_table_styles([
-                        {'selector': 'thead th:nth-child(1)', 'props': [('width', '10%')]},  # Index
-                        {'selector': 'thead th:nth-child(2)', 'props': [('width', '30%')]},  # Key
-                        {'selector': 'thead th:nth-child(3)', 'props': [('width', '60%')]}  # Value
+                        {'selector': 'thead th:nth-child(1)', 'props': [('width', '10%')]},
+                        {'selector': 'thead th:nth-child(2)', 'props': [('width', '30%')]},
+                        {'selector': 'thead th:nth-child(3)', 'props': [('width', '60%')]}
                     ])
                     st.markdown("<h3 style='text-align: center;'>Chain Consistency Results</h3>", unsafe_allow_html=True)
                     st.dataframe(df_chain_styled, use_container_width=True)
                 with col2:
                     df_eventual_styled = df_eventual.style.set_table_styles([
-                        {'selector': 'thead th:nth-child(1)', 'props': [('width', '10%')]},  # Index
-                        {'selector': 'thead th:nth-child(2)', 'props': [('width', '30%')]},  # Key
-                        {'selector': 'thead th:nth-child(3)', 'props': [('width', '60%')]}  # Value
+                        {'selector': 'thead th:nth-child(1)', 'props': [('width', '10%')]},
+                        {'selector': 'thead th:nth-child(2)', 'props': [('width', '30%')]},
+                        {'selector': 'thead th:nth-child(3)', 'props': [('width', '60%')]}
                     ])
                     st.markdown("<h3 style='text-align: center;'>Eventual Consistency Results</h3>", unsafe_allow_html=True)
                     st.dataframe(df_eventual_styled, use_container_width=True)
@@ -1069,7 +1061,7 @@ if selected == "Experiments":
                 df_diff_filtered = df_diff_filtered.rename(columns={"Value": "Chain"})
 
                 def get_extra_words(chain_val, eventual_val):
-                    chain_words = set(str(chain_val).split(", "))  # Convert to sets for comparison
+                    chain_words = set(str(chain_val).split(", "))
                     eventual_words = set(str(eventual_val).split(", "))
                     extra_in_chain = ", ".join(chain_words - eventual_words) if chain_words - eventual_words else None
                     extra_in_eventual = ", ".join(
@@ -1086,6 +1078,5 @@ if selected == "Experiments":
             except Exception as e:
                 st.error(f"Error: {e}")
 
-# ---- FOOTER ----
 current_year = datetime.datetime.now().year
 st.markdown(f"<div style='text-align: center; padding-top:20px;'>🎼 Conchord © {current_year}</div>", unsafe_allow_html=True)

@@ -1,11 +1,5 @@
 import socket
-import os
 import json
-import time
-import pandas as pd
-from tqdm import tqdm
-from tabulate import tabulate
-import os
 import time
 import pandas as pd
 from tqdm import tqdm
@@ -13,12 +7,10 @@ from tabulate import tabulate
 import os
 
 def save_results_to_csv(df, filename):
-    """Save DataFrame results to a CSV file."""
     df.to_csv(filename, index=False)
     print(f"Results saved to {filename}")
 
 def send_command(command, host='127.0.0.1', port=5000):
-    """Send a command to the bootstrap node and return the response."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             client.connect((host, port))
@@ -35,7 +27,6 @@ def send_command(command, host='127.0.0.1', port=5000):
 
 
 def process_insert_directory(directory):
-    """Process batch insert from directory files."""
     if not os.path.exists(directory) or not os.path.isdir(directory):
         return False, 0, None, 0
 
@@ -57,7 +48,7 @@ def process_insert_directory(directory):
         filepath = os.path.join(directory, filename)
         try:
             with open(filepath, 'r', encoding='utf-8') as file:
-                value = filename.split('_')[1]  # Extract number part
+                value = filename.split('_')[1]
                 keys = [line.strip() for line in file if line.strip()]
 
                 for key in keys:
@@ -71,7 +62,6 @@ def process_insert_directory(directory):
     return True, elapsed_time, network_config, key_counter
 
 def process_query_directory(directory):
-    """Process batch queries from directory files."""
     if not os.path.exists(directory) or not os.path.isdir(directory):
         return False, 0, None, 0
 
@@ -106,7 +96,6 @@ def process_query_directory(directory):
     return True, elapsed_time, network_config, key_counter
 
 def process_request_directory(request_directory):
-    """Process insert and query requests from all files in a directory."""
     if not os.path.exists(request_directory) or not os.path.isdir(request_directory):
         return False, "Directory not found", None
 
@@ -144,7 +133,6 @@ def process_request_directory(request_directory):
     return True, responses, network_config
 
 def run_freshness_experiment(request_directory):
-    """Run an experiment to compare freshness between chain and eventual consistency."""
     settings = [("3", "chain"), ("3", "eventual")]
     chain_results = []
     eventual_results = []
@@ -169,7 +157,6 @@ def run_freshness_experiment(request_directory):
             pbar.update(1)
             tqdm.write("Let the Conchord rest for 1 second.")
 
-    # Save results to separate CSV files
     df_chain = pd.DataFrame(chain_results, columns=["Consistency", "Key", "Value"]).drop(columns=["Consistency"])
     df_eventual = pd.DataFrame(eventual_results, columns=["Consistency", "Key", "Value"]).drop(columns=["Consistency"])
 
@@ -179,7 +166,6 @@ def run_freshness_experiment(request_directory):
     input("\nSaved results to freshness_chain.csv and freshness_eventual.csv\nPress Enter to return to the menu...")
 
 def reset_config(replication_factor, consistency_type):
-    """Reset the network configuration."""
     if not replication_factor.isdigit():
         return "Error: Replication factor must be a number."
     command = f"reset_config {replication_factor} {consistency_type}"
@@ -196,7 +182,6 @@ def reset_config(replication_factor, consistency_type):
 
 def run_insert_experiment(directory):
     try:
-        """Run an experiment with different configurations and batch inserts."""
         settings = [
             ("1", "chain"), ("3", "chain"), ("5", "chain"),
             ("1", "eventual"), ("3", "eventual"), ("5", "eventual")
@@ -233,7 +218,6 @@ def run_insert_experiment(directory):
 
 def run_query_experiment(insert_directory, queries_directory):
     try:
-        """Run a query experiment with different configurations and batch queries."""
         settings = [
             ("1", "chain"), ("3", "chain"), ("5", "chain"),
             ("1", "eventual"), ("3", "eventual"), ("5", "eventual")
