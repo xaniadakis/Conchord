@@ -197,8 +197,9 @@ class Node:
             return json.dumps({str(self.node_id)[-4:]: "ACK"}, indent=4)
 
         # forward request to successor and collect response
-        response = self.forward_request(command="reset_config", replication_factor=str(replication_factor),
-                                        consistency=consistency, initial_node=initial_node)
+        # response = self.forward_request(command="reset_config", replication_factor=str(replication_factor),
+        #                                 consistency=consistency, initial_node=initial_node)
+        response = self.forward_request("reset_config", str(replication_factor), consistency, initial_node=initial_node)
 
         # if response is empty, return only this node's data
         if not response.strip():
