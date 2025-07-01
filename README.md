@@ -1,7 +1,15 @@
-# Chord Distributed Hash Table 
+# ConChord
 
 ## Overview
-This project implements a **Chord Distributed Hash Table (DHT)** in Python, supporting **key-value storage, node join/departure, replication, and consistency mechanisms**. It is designed to be used in a distributed network of nodes where each node is responsible for a portion of the keyspace.
+
+ConChord is a distributed, peer-to-peer key-value store based on the Chord DHT protocol, designed to explore the 
+trade-offs between consistency and performance. It features configurable replication, two consistency models 
+(linearizability and eventual), and robust client interaction via both CLI and a real-time web-based GUI Streamlit app.
+
+Deployed on a multi-node AWS cloud infrastructure, ConChord supports live node join/departure, decentralized lookups
+and flexible topology management. 
+
+[//]: # (This project implements a **Chord Distributed Hash Table &#40;DHT&#41;** in Python, supporting **key-value storage, node join/departure, replication, and consistency mechanisms**. It is designed to be used in a distributed network of nodes where each node is responsible for a portion of the keyspace.)
 
 ## Features
 - **Decentralized peer-to-peer network** based on the Chord protocol.
@@ -13,6 +21,12 @@ This project implements a **Chord Distributed Hash Table (DHT)** in Python, supp
 - **Overlay Querying**: Allows visualization of the network structure.
 - **Data Insertion, Querying, and Deletion** commands for client interaction.
 - **CLI and GUI Clients**: Interact with the network via command-line or a web-based interface using Streamlit.
+
+## Experimental Highlights
+
+- Benchmarked **write and read throughput** under various replication factors
+- Compared data **freshness** between strong and eventual consistency
+- Achieved >1700 reads/sec with 5 replicas under eventual consistency
 
 ---
 
@@ -148,3 +162,9 @@ Key not found
 ./kill_nodes.sh
 ```
 ---
+
+## Contributors
+
+- [Evangelos Chaniadakis](https://github.com/xaniadakis)
+- [Tasos Kanellos](https://github.com/taskanell)
+- [Dimitra Kallini](https://github.com/dimkallini)
