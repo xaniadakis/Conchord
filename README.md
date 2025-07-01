@@ -1,5 +1,7 @@
 # ConChord
 
+ConChord strikes a balance — named after the Chord DHT protocol and a nod to concord, meaning harmony. In a distributed system where coordination is key, the name reflects our aim for structural harmony and consistent interaction among nodes.
+
 ## Overview
 
 ConChord is a distributed, peer-to-peer key-value store based on the Chord DHT protocol, designed to explore the 
